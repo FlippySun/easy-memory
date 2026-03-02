@@ -18,7 +18,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ===== Imports =====
-import { handleSave, clearHashCache, clearProjectLocks } from "../src/tools/save.js";
+import {
+  handleSave,
+  clearHashCache,
+  clearProjectLocks,
+} from "../src/tools/save.js";
 import { handleSearch } from "../src/tools/search.js";
 import { handleForget } from "../src/tools/forget.js";
 import { handleStatus } from "../src/tools/status.js";
@@ -126,7 +130,8 @@ describe("Audit #1: 向量库读写", () => {
   it("should pass vector array to qdrant upsert", async () => {
     const deps = createSaveDeps();
     await handleSave({ content: "vector test" }, deps);
-    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     const points = upsertCall[1];
     expect(Array.isArray(points[0].vector)).toBe(true);
     expect(points[0].vector.length).toBe(768);
@@ -165,8 +170,14 @@ describe("Audit #2: 记忆污染", () => {
 
   it("should per-project isolate hash dedup", async () => {
     const deps = createSaveDeps();
-    const r1 = await handleSave({ content: "same content", project: "proj-a" }, deps);
-    const r2 = await handleSave({ content: "same content", project: "proj-b" }, deps);
+    const r1 = await handleSave(
+      { content: "same content", project: "proj-a" },
+      deps,
+    );
+    const r2 = await handleSave(
+      { content: "same content", project: "proj-b" },
+      deps,
+    );
     expect(r1.status).toBe("saved");
     expect(r2.status).toBe("saved"); // Different project → not duplicate
     expect(deps.qdrant.upsert).toHaveBeenCalledTimes(2);
@@ -174,25 +185,29 @@ describe("Audit #2: 记忆污染", () => {
 
   it("should serialize concurrent writes to same project via lock", async () => {
     const deps = createSaveDeps();
-    let resolveEmbed!: (v: { vector: number[]; model: string; provider: string }) => void;
+    let resolveEmbed!: (v: {
+      vector: number[];
+      model: string;
+      provider: string;
+    }) => void;
     let callCount = 0;
 
     // 第一次 embed 会阻塞，模拟并发
-    (deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>).mockImplementation(
-      () => {
-        callCount++;
-        if (callCount === 1) {
-          return new Promise((resolve) => {
-            resolveEmbed = resolve;
-          });
-        }
-        return Promise.resolve({
-          vector: new Array(768).fill(0.2),
-          model: "nomic-embed-text",
-          provider: "ollama",
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return new Promise((resolve) => {
+          resolveEmbed = resolve;
         });
-      },
-    );
+      }
+      return Promise.resolve({
+        vector: new Array(768).fill(0.2),
+        model: "nomic-embed-text",
+        provider: "ollama",
+      });
+    });
 
     const p1 = handleSave({ content: "concurrent A" }, deps);
     const p2 = handleSave({ content: "concurrent B" }, deps);
@@ -224,7 +239,8 @@ describe("Audit #3: 检索错位", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test" }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     const filter = searchCall[2]?.filter;
     expect(filter).toBeDefined();
     expect(filter.must).toEqual(
@@ -241,7 +257,8 @@ describe("Audit #3: 检索错位", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test", include_outdated: true }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     const filter = searchCall[2]?.filter;
     expect(filter.must).toEqual(
       expect.arrayContaining([
@@ -257,7 +274,8 @@ describe("Audit #3: 检索错位", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test" }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     expect(searchCall[2]).toEqual(
       expect.objectContaining({ scoreThreshold: 0.65 }),
     );
@@ -287,15 +305,20 @@ describe("Audit #4: 安全越权", () => {
     const deps = createSaveDeps();
     await handleSave({ content: "no project specified" }, deps);
 
-    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     expect(upsertCall[0]).toBe("test-project");
   });
 
   it("should respect explicitly specified project", async () => {
     const deps = createSaveDeps();
-    await handleSave({ content: "specific project", project: "secure-proj" }, deps);
+    await handleSave(
+      { content: "specific project", project: "secure-proj" },
+      deps,
+    );
 
-    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     expect(upsertCall[0]).toBe("secure-proj");
   });
 });
@@ -363,15 +386,14 @@ describe("Audit #6: 过期记忆×自动执行", () => {
 
     await handleSearch({ query: "test", include_outdated: false }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     const filter = searchCall[2]?.filter;
     const lifecycleCondition = filter.must.find(
       (c: Record<string, unknown>) =>
         (c as { key: string }).key === "lifecycle",
     );
-    const allowed = (
-      lifecycleCondition.match as { any: string[] }
-    ).any;
+    const allowed = (lifecycleCondition.match as { any: string[] }).any;
     expect(allowed).not.toContain("archived");
     expect(allowed).not.toContain("outdated");
   });
@@ -487,14 +509,17 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
     const deps = createSaveDeps();
     await handleSave({ content: "model tracking test" }, deps);
 
-    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     const payload = upsertCall[1][0].payload;
     expect(payload.embedding_model).toBe("nomic-embed-text");
   });
 
   it("should store actual fallback model when primary fails", async () => {
     const deps = createSaveDeps();
-    (deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
       vector: new Array(768).fill(0.3),
       model: "gemini-embedding-001", // Fallback happened, Gemini was used
       provider: "gemini",
@@ -502,13 +527,18 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
 
     await handleSave({ content: "fallback model test" }, deps);
 
-    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(upsertCall[1][0].payload.embedding_model).toBe("gemini-embedding-001");
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    expect(upsertCall[1][0].payload.embedding_model).toBe(
+      "gemini-embedding-001",
+    );
   });
 
   it("should warn in search when results have mismatched models", async () => {
     const deps = createSearchDeps();
-    (deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
       vector: new Array(768).fill(0.1),
       model: "nomic-embed-text",
       provider: "ollama",
@@ -631,7 +661,8 @@ describe("Audit #12: 分支态", () => {
       deps,
     );
     expect(result.status).toBe("saved");
-    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]![1][0].payload;
+    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]![1][0].payload;
     expect(payload.source_file).toBe("src/index.ts");
     expect(payload.source_line).toBe(10);
   });
@@ -705,7 +736,8 @@ MIIEpAIBAAKCAQEA...
     );
 
     // Verify sanitized content was stored
-    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]![1][0].payload;
+    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]![1][0].payload;
     expect(payload.content).toContain("[REDACTED]");
     expect(payload.content).not.toContain("AKIAIOSFODNN7EXAMPLE");
   });
@@ -722,9 +754,8 @@ describe("Audit #14: 最小权限", () => {
   });
 
   it("should mandate Gemini API key", async () => {
-    const { GeminiEmbeddingProvider } = await import(
-      "../src/services/embedding-providers.js"
-    );
+    const { GeminiEmbeddingProvider } =
+      await import("../src/services/embedding-providers.js");
     expect(() => new GeminiEmbeddingProvider({ apiKey: "" })).toThrow(
       "API key is required",
     );
@@ -751,9 +782,8 @@ describe("Audit #15: TLS + 静态加密", () => {
     // We need to inspect GeminiEmbeddingProvider's doFetch
     // This is best verified by reading the source code, but we can test
     // that the provider constructs correctly
-    const { GeminiEmbeddingProvider } = await import(
-      "../src/services/embedding-providers.js"
-    );
+    const { GeminiEmbeddingProvider } =
+      await import("../src/services/embedding-providers.js");
     const provider = new GeminiEmbeddingProvider({ apiKey: "test-key" });
     expect(provider.name).toBe("gemini");
     // The URL is hardcoded as https://generativelanguage.googleapis.com in doFetch
@@ -777,7 +807,9 @@ describe("Audit #15: TLS + 静态加密", () => {
 // =============================================================================
 describe("Audit #16: 审计日志", () => {
   it("should write audit log on forget operation (stderr)", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
     const deps = createForgetDeps();
 
     await handleForget(
@@ -785,7 +817,9 @@ describe("Audit #16: 审计日志", () => {
       deps,
     );
 
-    const logOutput = stderrSpy.mock.calls.map((c) => c[0]?.toString()).join("");
+    const logOutput = stderrSpy.mock.calls
+      .map((c) => c[0]?.toString())
+      .join("");
     expect(logOutput).toContain("AUDIT:memory_forget");
     expect(logOutput).toContain(VALID_UUID);
 
@@ -793,7 +827,9 @@ describe("Audit #16: 审计日志", () => {
   });
 
   it("should include all required fields in forget audit entry", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
     const deps = createForgetDeps();
 
     await handleForget(
@@ -801,7 +837,9 @@ describe("Audit #16: 审计日志", () => {
       deps,
     );
 
-    const logOutput = stderrSpy.mock.calls.map((c) => c[0]?.toString()).join("");
+    const logOutput = stderrSpy.mock.calls
+      .map((c) => c[0]?.toString())
+      .join("");
     // Audit entry should contain: id, action, reason, project, timestamp
     expect(logOutput).toContain(VALID_UUID);
     expect(logOutput).toContain("archive"); // delete → archive downgrade
@@ -812,13 +850,17 @@ describe("Audit #16: 审计日志", () => {
   });
 
   it("should write save audit log on successful save", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
     const deps = createSaveDeps();
     clearHashCache();
 
     await handleSave({ content: "audit save test" }, deps);
 
-    const logOutput = stderrSpy.mock.calls.map((c) => c[0]?.toString()).join("");
+    const logOutput = stderrSpy.mock.calls
+      .map((c) => c[0]?.toString())
+      .join("");
     expect(logOutput).toContain("AUDIT:memory_save");
 
     stderrSpy.mockRestore();
@@ -851,7 +893,8 @@ describe("Audit #17: Memory Trust Score", () => {
       deps,
     );
 
-    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]![1][0].payload;
+    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]![1][0].payload;
     expect(payload.confidence).toBe(0.95);
   });
 
@@ -859,7 +902,8 @@ describe("Audit #17: Memory Trust Score", () => {
     const deps = createSaveDeps();
     await handleSave({ content: "default confidence" }, deps);
 
-    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock.calls[0]![1][0].payload;
+    const payload = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]![1][0].payload;
     expect(payload.confidence).toBe(0.7);
   });
 
@@ -1010,7 +1054,8 @@ describe("Audit #19: 回答门禁", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test" }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
     const filter = searchCall[2]?.filter;
     const lifecycleMatch = filter.must.find(
       (c: { key: string }) => c.key === "lifecycle",
@@ -1074,10 +1119,10 @@ describe("Audit #20: Kill Switch", () => {
     const closeable = { close: vi.fn() };
     const mockExit = vi.fn();
 
-    const teardown = setupGracefulShutdown(
-      async () => {},
-      { exitFn: mockExit, closeables: [closeable] },
-    );
+    const teardown = setupGracefulShutdown(async () => {}, {
+      exitFn: mockExit,
+      closeables: [closeable],
+    });
 
     teardown();
     // Closeable registration is verified — actual close() is called during shutdown
@@ -1087,10 +1132,9 @@ describe("Audit #20: Kill Switch", () => {
     const { setupGracefulShutdown } = await import("../src/utils/shutdown.js");
     const mockExit = vi.fn();
 
-    const teardown = setupGracefulShutdown(
-      async () => {},
-      { exitFn: mockExit },
-    );
+    const teardown = setupGracefulShutdown(async () => {}, {
+      exitFn: mockExit,
+    });
 
     // EPIPE should be handled gracefully by the uncaughtException handler
     // (verified by source code inspection — EPIPE is caught and silenced)
@@ -1098,16 +1142,20 @@ describe("Audit #20: Kill Switch", () => {
   });
 
   it("should use AbortController to cancel in-flight embedding requests on shutdown", async () => {
-    const { OllamaEmbeddingProvider } = await import(
-      "../src/services/embedding-providers.js"
-    );
+    const { OllamaEmbeddingProvider } =
+      await import("../src/services/embedding-providers.js");
     const provider = new OllamaEmbeddingProvider();
 
     // close() should abort all active controllers
     provider.close();
     // Access protected properties — safe in JS runtime for testing
-    expect((provider as unknown as { _closedByShutdown: boolean })._closedByShutdown).toBe(true);
-    expect((provider as unknown as { _activeControllers: Set<unknown> })._activeControllers.size).toBe(0);
+    expect(
+      (provider as unknown as { _closedByShutdown: boolean })._closedByShutdown,
+    ).toBe(true);
+    expect(
+      (provider as unknown as { _activeControllers: Set<unknown> })
+        ._activeControllers.size,
+    ).toBe(0);
   });
 });
 
@@ -1139,7 +1187,9 @@ describe("Audit: 完整管道集成验证", () => {
 
     // Search (mock returns the saved memory)
     const searchDeps = createSearchDeps();
-    (searchDeps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    (
+      searchDeps.qdrant.search as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
       {
         id: saveResult.id,
         score: 0.95,
@@ -1161,20 +1211,33 @@ describe("Audit: 完整管道集成验证", () => {
       searchDeps,
     );
     expect(searchResult.total_found).toBe(1);
-    expect(searchResult.memories[0]!.content).toContain("[MEMORY_CONTENT_START]");
+    expect(searchResult.memories[0]!.content).toContain(
+      "[MEMORY_CONTENT_START]",
+    );
 
     // Forget
     const forgetDeps = createForgetDeps();
     const forgetResult = await handleForget(
-      { id: saveResult.id, action: "archive", reason: "test cleanup", project: "integration-test" },
+      {
+        id: saveResult.id,
+        action: "archive",
+        reason: "test cleanup",
+        project: "integration-test",
+      },
       forgetDeps,
     );
     expect(forgetResult.status).toBe("archived");
 
     // Search again (should not find archived memory)
-    (searchDeps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    (
+      searchDeps.qdrant.search as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([]);
     const searchResult2 = await handleSearch(
-      { query: "pipeline test", project: "integration-test", include_outdated: false },
+      {
+        query: "pipeline test",
+        project: "integration-test",
+        include_outdated: false,
+      },
       searchDeps,
     );
     expect(searchResult2.total_found).toBe(0);
@@ -1182,9 +1245,9 @@ describe("Audit: 完整管道集成验证", () => {
 
   it("should handle embedding service failure gracefully", async () => {
     const deps = createSaveDeps();
-    (deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("All providers unavailable"),
-    );
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(new Error("All providers unavailable"));
 
     const result = await handleSave({ content: "embedding fail test" }, deps);
     expect(result.status).toBe("pending_embedding");

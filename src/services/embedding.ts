@@ -82,9 +82,7 @@ export class EmbeddingService {
   private readonly shouldUseProvider:
     | ((provider: EmbeddingProvider) => boolean)
     | undefined;
-  private readonly onSuccess:
-    | ((result: EmbeddingResult) => void)
-    | undefined;
+  private readonly onSuccess: ((result: EmbeddingResult) => void) | undefined;
 
   constructor(config: EmbeddingServiceConfig) {
     if (!config.providers || config.providers.length === 0) {

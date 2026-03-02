@@ -125,8 +125,7 @@ export async function handleSearch(
   // D-AUDIT: 跨模型向量混合检测 — auto 模式降级时 Gemini/Ollama 向量不在同一语义空间
   const mismatchedCount = results.filter(
     (r) =>
-      r.payload.embedding_model &&
-      r.payload.embedding_model !== queryModel,
+      r.payload.embedding_model && r.payload.embedding_model !== queryModel,
   ).length;
 
   let systemNote = SYSTEM_NOTE;

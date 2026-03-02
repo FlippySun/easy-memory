@@ -1,0 +1,90 @@
+# =============================================================================
+# Easy Memory — Nginx 反向代理配置模板 (TLS 终结)
+# =============================================================================
+#
+# 前提条件:
+#   1. 已有 TLS 证书（Let's Encrypt via certbot、acme.sh 或其他 CA）
+#   2. Easy Memory 以 MODE=http 运行，监听 127.0.0.1:3080
+#   3. 将 memory.example.com 替换为你的域名
+#   4. 将证书路径替换为实际路径
+#
+# 使用方法:
+#   cp deploy/nginx.conf.example /etc/nginx/sites-available/easy-memory
+#   ln -s /etc/nginx/sites-available/easy-memory /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Easy Memory 环境变量配置:
+#   EASY_MEMORY_MODE=http
+#   HTTP_HOST=127.0.0.1          # 默认值，仅本机可达
+#   HTTP_PORT=3080               # 默认值
+#   HTTP_AUTH_TOKEN=your-secret  # 必须设置
+#   TRUST_PROXY=true             # 信任 Nginx 的 X-Forwarded-* 头
+#   REQUIRE_TLS=true             # 拒绝非 HTTPS 请求
+# =============================================================================
+
+# HTTP → HTTPS 强制重定向
+server {
+    listen 80;
+    listen [::]:80;
+    server_name memory.example.com;
+
+    # Let's Encrypt ACME HTTP-01 挑战路径
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # 其他所有请求 → 301 重定向到 HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS 主配置
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name memory.example.com;
+
+    # ===== TLS 证书 =====
+    # Let's Encrypt (certbot) 路径示例:
+    ssl_certificate     /etc/letsencrypt/live/memory.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/memory.example.com/privkey.pem;
+
+    # ===== TLS 安全配置 =====
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+
+    # OCSP Stapling
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
+    # ===== 安全响应头 =====
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+
+    # ===== 反向代理到 Easy Memory =====
+    location / {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
+
+        # 必须设置: Easy Memory 的 tlsEnforcement 中间件依赖此头
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host $host;
+
+        # 超时配置
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+
+        # 禁用请求缓冲（适合 API 场景）
+        proxy_request_buffering off;
+    }
+
+    # ===== 访问日志 =====
+    access_log /var/log/nginx/easy-memory-access.log;
+    error_log  /var/log/nginx/easy-memory-error.log;
+}

@@ -7705,6 +7705,7 @@ _本安全审查由第八轮 Security & Edge Case Adversarial Agent 生成。聚
 ### 背景
 
 双引擎 Embedding 架构引入了远端 Gemini API，带来潜在的成本风险：
+
 - AI 代理无限循环导致的调用风暴
 - Gemini API 账单意外暴涨
 - 需要在预算耗尽时自动降级到免费的本地 Ollama
@@ -7730,6 +7731,7 @@ EmbeddingService.embedWithMeta()
 ```
 
 **核心原则**：
+
 - RateLimiter 是纯工具类，不耦合业务逻辑
 - EmbeddingService 通过 `shouldUseProvider` 回调实现动态 Provider 过滤
 - EmbeddingService 通过 `onSuccess` 回调通知成本追踪，不反向依赖 RateLimiter
@@ -7737,11 +7739,11 @@ EmbeddingService.embedWithMeta()
 
 ### 环境变量
 
-| 变量                   | 默认值 | 说明                           |
-| ---------------------- | ------ | ------------------------------ |
-| `RATE_LIMIT_PER_MINUTE` | 60    | 全局每分钟最大调用数           |
-| `GEMINI_MAX_PER_HOUR`   | 200   | Gemini 每小时最大调用数        |
-| `GEMINI_MAX_PER_DAY`    | 2000  | Gemini 每日最大调用数          |
+| 变量                    | 默认值 | 说明                    |
+| ----------------------- | ------ | ----------------------- |
+| `RATE_LIMIT_PER_MINUTE` | 60     | 全局每分钟最大调用数    |
+| `GEMINI_MAX_PER_HOUR`   | 200    | Gemini 每小时最大调用数 |
+| `GEMINI_MAX_PER_DAY`    | 2000   | Gemini 每日最大调用数   |
 
 ### 熔断恢复策略
 
@@ -7751,6 +7753,7 @@ EmbeddingService.embedWithMeta()
 ### 可观测性
 
 `memory_status` 输出新增 `cost_guard` 字段：
+
 ```json
 {
   "cost_guard": {
@@ -7764,13 +7767,13 @@ EmbeddingService.embedWithMeta()
 
 ### 影响文件
 
-| 文件 | 变更类型 | 说明 |
-| ---- | -------- | ---- |
-| `src/utils/rate-limiter.ts` | 新建 | RateLimiter 类 |
-| `src/services/embedding.ts` | 修改 | EmbeddingServiceConfig 新增 shouldUseProvider + onSuccess |
-| `src/types/schema.ts` | 修改 | MemoryStatusOutput 新增 cost_guard 字段 |
-| `src/tools/status.ts` | 修改 | StatusHandlerDeps 新增 rateLimiter + 输出统计 |
-| `src/index.ts` | 修改 | RateLimiter 装配 + 回调注入 + Tool 限流 |
+| 文件                        | 变更类型 | 说明                                                      |
+| --------------------------- | -------- | --------------------------------------------------------- |
+| `src/utils/rate-limiter.ts` | 新建     | RateLimiter 类                                            |
+| `src/services/embedding.ts` | 修改     | EmbeddingServiceConfig 新增 shouldUseProvider + onSuccess |
+| `src/types/schema.ts`       | 修改     | MemoryStatusOutput 新增 cost_guard 字段                   |
+| `src/tools/status.ts`       | 修改     | StatusHandlerDeps 新增 rateLimiter + 输出统计             |
+| `src/index.ts`              | 修改     | RateLimiter 装配 + 回调注入 + Tool 限流                   |
 
 ### 测试覆盖
 

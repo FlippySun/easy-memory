@@ -131,7 +131,9 @@ describe("handleSearch", () => {
   // D-AUDIT: 跨模型向量混合检测
   it("should warn when results have mismatched embedding models", async () => {
     // 查询使用 nomic-embed-text (Ollama)
-    (deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
       vector: new Array(768).fill(0.1),
       model: "nomic-embed-text",
       provider: "ollama",
@@ -179,7 +181,9 @@ describe("handleSearch", () => {
   });
 
   it("should not warn when all results use same model as query", async () => {
-    (deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
       vector: new Array(768).fill(0.1),
       model: "nomic-embed-text",
       provider: "ollama",

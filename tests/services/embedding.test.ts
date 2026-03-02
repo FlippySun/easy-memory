@@ -345,8 +345,7 @@ describe("EmbeddingService (Unified Facade)", () => {
       let blockGemini = false;
       const service = new EmbeddingService({
         providers: [primaryProvider, fallbackProvider],
-        shouldUseProvider: (p) =>
-          !(p.name === "gemini" && blockGemini),
+        shouldUseProvider: (p) => !(p.name === "gemini" && blockGemini),
       });
 
       // 第一次：gemini 可用

@@ -181,9 +181,7 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
   private async safeFetch(text: string): Promise<number[]> {
     // 前置守卫: close() 后禁止发起新请求 (防止 sleep 期间 close 后重试泄漏)
     if (this._closedByShutdown) {
-      throw new Error(
-        `${this.name} request aborted: service is shutting down`,
-      );
+      throw new Error(`${this.name} request aborted: service is shutting down`);
     }
     const controller = new AbortController();
     this._activeControllers.add(controller);

@@ -32,6 +32,17 @@ export interface ShutdownOptions {
   exitFn?: (code: number) => void;
   /** D2-6: 需要在关闭时调用 close() 的外部服务 */
   closeables?: Closeable[];
+  /**
+   * 运行模式 — 影响 stdin 监听行为:
+   * - "mcp" (默认): 监听 stdin close/end 事件 + process.stdin.resume()
+   * - "http": 跳过 stdin 监听，仅依赖 SIGTERM/SIGINT
+   */
+  mode?: "mcp" | "http";
+  /**
+   * HTTP Server 实例 — HTTP 模式下用于优雅关闭 (server.close())。
+   * 必须提供 close() 方法，该方法在停止新连接后回调。
+   */
+  httpServer?: { close: (cb: (err?: Error) => void) => void };
 }
 
 /**
@@ -45,8 +56,11 @@ export function setupGracefulShutdown(
   cleanup: () => Promise<void>,
   options: ShutdownOptions = {},
 ): () => void {
-  const { drainMs = 5000, exitFn = (code: number) => process.exit(code) } =
-    options;
+  const {
+    drainMs = 5000,
+    exitFn = (code: number) => process.exit(code),
+    mode = "mcp",
+  } = options;
 
   let shutdownInProgress = false;
 
@@ -54,7 +68,7 @@ export function setupGracefulShutdown(
     if (shutdownInProgress) return;
     shutdownInProgress = true;
 
-    log.info(`Graceful shutdown initiated`, { source });
+    log.info(`Graceful shutdown initiated`, { source, mode });
 
     // Watchdog: 强制退出兜底
     const watchdog = setTimeout(() => {
@@ -68,7 +82,26 @@ export function setupGracefulShutdown(
     }
 
     try {
-      // D2-6: 先关闭外部服务
+      // HTTP 模式: 先停止接受新连接
+      if (mode === "http" && options.httpServer) {
+        await new Promise<void>((resolve, reject) => {
+          options.httpServer!.close((err) => {
+            if (err) {
+              log.warn("HTTP server close error", {
+                error: err.message,
+              });
+              reject(err);
+            } else {
+              log.info("HTTP server stopped accepting new connections");
+              resolve();
+            }
+          });
+        }).catch(() => {
+          // httpServer.close 失败不阻塞后续清理
+        });
+      }
+
+      // D2-6: 关闭外部服务
       if (options.closeables && options.closeables.length > 0) {
         await Promise.allSettled(
           options.closeables.map((s) => Promise.resolve(s.close())),
@@ -106,12 +139,16 @@ export function setupGracefulShutdown(
     void initiateShutdown("SIGINT");
   };
 
-  // D2-3: 保持 stdin 流打开，防止进程因 stdin 关闭而提前退出
-  process.stdin.resume();
+  // MCP 模式: stdin 监听 + resume（防止进程因 stdin 关闭而提前退出）
+  // HTTP 模式: 跳过 stdin 监听（HTTP 不依赖 stdin，resume 会阻止进程自然退出）
+  if (mode === "mcp") {
+    // D2-3: 保持 stdin 流打开
+    process.stdin.resume();
+    process.stdin.on("close", onStdinClose);
+    process.stdin.on("end", onStdinEnd);
+  }
 
-  // 注册监听器
-  process.stdin.on("close", onStdinClose);
-  process.stdin.on("end", onStdinEnd);
+  // SIGTERM/SIGINT 在两种模式下都需要
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
 
@@ -134,8 +171,10 @@ export function setupGracefulShutdown(
 
   // --- Teardown ---
   return () => {
-    process.stdin.off("close", onStdinClose);
-    process.stdin.off("end", onStdinEnd);
+    if (mode === "mcp") {
+      process.stdin.off("close", onStdinClose);
+      process.stdin.off("end", onStdinEnd);
+    }
     process.off("SIGTERM", onSigterm);
     process.off("SIGINT", onSigint);
     process.off("uncaughtException", onUncaughtException);

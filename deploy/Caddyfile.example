@@ -1,0 +1,52 @@
+# =============================================================================
+# Easy Memory — Caddy 反向代理配置模板 (Auto-TLS)
+# =============================================================================
+#
+# Caddy 自动从 Let's Encrypt 获取并续期 TLS 证书，零配置 HTTPS。
+#
+# 前提条件:
+#   1. 域名 DNS A/AAAA 记录已解析到此 VPS 的公网 IP
+#   2. 端口 80 和 443 对外开放（Let's Encrypt ACME HTTP-01/TLS-ALPN-01 挑战）
+#   3. Easy Memory 以 MODE=http 运行，监听 127.0.0.1:3080
+#
+# 使用方法:
+#   cp deploy/Caddyfile.example /etc/caddy/Caddyfile
+#   # 将 memory.example.com 替换为你的域名
+#   sudo systemctl reload caddy
+#
+# Easy Memory 环境变量配置:
+#   EASY_MEMORY_MODE=http
+#   HTTP_HOST=127.0.0.1          # 默认值，仅本机可达
+#   HTTP_PORT=3080               # 默认值
+#   HTTP_AUTH_TOKEN=your-secret  # 必须设置
+#   TRUST_PROXY=true             # 信任 Caddy 的 X-Forwarded-* 头
+#   REQUIRE_TLS=true             # 拒绝非 HTTPS 请求
+# =============================================================================
+
+memory.example.com {
+    # 反向代理到 Easy Memory (仅本机回环地址)
+    reverse_proxy 127.0.0.1:3080 {
+        # 传递必要的代理头
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP {remote_host}
+    }
+
+    # 安全响应头
+    header {
+        # HSTS — 强制浏览器使用 HTTPS (1 年)
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # 防止 MIME 类型嗅探
+        X-Content-Type-Options "nosniff"
+        # 防止点击劫持
+        X-Frame-Options "DENY"
+        # 隐藏服务器信息
+        -Server
+    }
+
+    # 访问日志
+    log {
+        output file /var/log/caddy/easy-memory-access.log
+        format json
+    }
+}
