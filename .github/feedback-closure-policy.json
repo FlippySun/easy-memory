@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "priority": "highest",
+  "singleSourceOfTruth": true,
+  "sessionClosure": {
+    "mustAskBeforeFinalReply": true,
+    "preferredInteractiveTool": "mcp_feedback_ask_user",
+    "fallbackToolsWhenUnavailable": ["ask_questions", "mcp_feedback_ask_confirm"],
+    "fallbackDisclosureRequired": true,
+    "closurePrompt": "还有什么需要调整或补充的吗？如果没有，请回复「结束会话」。",
+    "endKeywords": ["结束会话", "结束", "结束对话", "done", "end session", "no more", "nothing else"]
+  },
+  "hardGuards": {
+    "blockTextOnlyCompletion": true,
+    "blockAfterShowResultWithoutInteractiveFollowup": true,
+    "blockAfterNotifyWithoutInteractiveFollowup": true
+  },
+  "conflictResolution": {
+    "ifConflictWithOtherPromptDocs": "this_file_wins"
+  }
+}

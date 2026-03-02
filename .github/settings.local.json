@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(npm search @anthropic mcp)",
+      "Bash(npm search:*)",
+      "Bash(git rm:*)",
+      "Bash(npm view:*)",
+      "Bash(npx:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "openspec",
+    "feedback",
+    "sequential-thinking",
+    "filesystem",
+    "tavily",
+    "@21st-dev/magic",
+    "context7",
+    "playwright",
+    "filesystem"
+  ],
+  "disabledMcpjsonServers": []
+}
