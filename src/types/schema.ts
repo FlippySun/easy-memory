@@ -88,7 +88,8 @@ export const MemorySearchInputSchema = z
     query: z.string().min(1),
     project: z.string().optional(),
     limit: z.number().int().min(1).max(20).default(5),
-    threshold: z.number().min(0).max(1).default(0.65),
+    // ⚠️ 必须与 THRESHOLDS.SEARCH_MIN_SCORE 保持一致
+    threshold: z.number().min(0).max(1).default(0.55),
     include_outdated: z.boolean().default(false),
     tags: z.array(z.string()).optional(),
   })
@@ -192,7 +193,9 @@ export const THRESHOLDS = {
   QUALITY_REJECT: 0.4,
 
   // 搜索管道
-  SEARCH_MIN_SCORE: 0.65,
+  // bge-m3 多语言模型，中文语义匹配分数相对合理，
+  // 下调阈值提高中文召回率，避免有效记忆被过滤。
+  SEARCH_MIN_SCORE: 0.55,
   SEARCH_DEFAULT_LIMIT: 5,
   SEARCH_MAX_LIMIT: 20,
 

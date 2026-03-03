@@ -5,7 +5,7 @@
 ## 📌 Context & Project Goal
 
 我们将基于 TypeScript 实现 `Easy Memory MCP` 项目的 Phase 1 (MVP版本)。
-本地环境：Mac M4, Node.js 20+, Docker (Qdrant + Ollama `nomic-embed-text` 均已就绪)。
+本地环境：Mac M4, Node.js 20+, Docker (Qdrant + Ollama `bge-m3` 均已就绪)。
 请阅读了项目的四个核心基石文档：
 
 1. `FEASIBILITY-ANALYSIS.md` (决策日志 & 深度架构分析)
@@ -81,7 +81,7 @@
 - **目标**：封装安全、带重试机制的外部 IO。
 - **动作**：
   1. 实现 `src/services/qdrant.ts`：初始化客户端时必须带上 `apiKey`。封装 `upsert` 方法时，**必须强制注入 `wait: true` 参数**（防止幻读）。
-  2. 实现 `src/services/embedding.ts`：对接本地 `http://localhost:11434/api/embeddings` (`nomic-embed-text`)，必须实现 fetch 的超时控制（如 10s）与 3 次指数退避重试。
+  2. 实现 `src/services/embedding.ts`：对接本地 `http://localhost:11434/api/embeddings` (`bge-m3`)，必须实现 fetch 的超时控制（如 10s）与 3 次指数退避重试。
   3. 编写 `vitest` Mock 测试验证重试与 API 组装参数是否正确。
 
 ### [Stage 4] 核心 MCP Tools 实现 (Handlers)

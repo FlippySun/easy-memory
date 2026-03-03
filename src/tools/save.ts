@@ -20,6 +20,7 @@ import type {
   EmbeddingService,
   EmbeddingResult,
 } from "../services/embedding.js";
+import type { BM25Encoder } from "../services/bm25.js";
 import { basicSanitize, isFullyRedacted } from "../utils/sanitize.js";
 import { computeHash } from "../utils/hash.js";
 import { log } from "../utils/logger.js";
@@ -27,6 +28,7 @@ import {
   MemorySaveInputSchema,
   CURRENT_SCHEMA_VERSION,
   type MemorySaveOutput,
+  slugify,
 } from "../types/schema.js";
 
 // ===== D-AUDIT: Save 审计日志 =====
@@ -49,6 +51,20 @@ const MAX_CONTENT_LENGTH = 50_000;
 
 // ===== D5-6: 内存 hashSet 容量上限 =====
 const MAX_HASH_SET_SIZE = 10_000;
+
+// ===== [FIX H-1]: Boundary Marker 剥离 =====
+/**
+ * 剥离 content 中的 boundary markers，防止存储的内容包含
+ * [MEMORY_CONTENT_START] / [MEMORY_CONTENT_END] 导致 search 输出时
+ * prompt injection 边界被攻击者提前关闭。
+ *
+ * 替换为无害形式 "(boundary marker removed)"
+ */
+const BOUNDARY_MARKER_PATTERN = /\[MEMORY_CONTENT_(?:START|END)\]/gi;
+
+function stripBoundaryMarkers(content: string): string {
+  return content.replace(BOUNDARY_MARKER_PATTERN, "(boundary marker removed)");
+}
 
 // ===== D4-2: Prompt Injection 检测模式 =====
 const INJECTION_PATTERNS: RegExp[] = [
@@ -129,6 +145,8 @@ function evictIfNeeded(hashSet: Set<string>): void {
 export interface SaveHandlerDeps {
   qdrant: QdrantService;
   embedding: EmbeddingService;
+  /** [ADR 补充二十] BM25 稀疏编码器 — 可选，缺失时跳过稀疏向量 */
+  bm25?: BM25Encoder;
   defaultProject: string;
   /** D3-5: 嵌入模型名称，避免硬编码 */
   embeddingModel?: string;
@@ -180,7 +198,10 @@ export async function handleSave(
   }
 
   // D4-2: Prompt Injection 检测
-  if (detectPromptInjection(input.content)) {
+  // [FIX H-5]: NFKC 归一化前置到 injection 检测之前
+  // 防止全角 Unicode (ｓｙｓｔｅｍ) 绕过正则
+  const normalizedContent = input.content.normalize("NFKC");
+  if (detectPromptInjection(normalizedContent)) {
     log.warn("Prompt injection detected, rejecting save", { project });
     return {
       id: "",
@@ -191,10 +212,20 @@ export async function handleSave(
   }
 
   // D5-1: per-project 串行化，防止并发去重竞态
-  return withProjectLock(project, async () => {
+  // [FIX M-2]: 使用 slugify 后的 project name 作为锁 key
+  // 防止 "my-project" 和 "my project" 等变体绕过去重
+  const projectSlug = slugify(project);
+  return withProjectLock(projectSlug, async () => {
     // Step 2: 安全脱敏
     const sanitizedContent = basicSanitize(input.content);
-    if (isFullyRedacted(input.content, sanitizedContent)) {
+
+    // [FIX H-1]: 剥离 boundary markers 防止 Prompt Injection 绕过
+    // 攻击者可在 content 中嵌入 [MEMORY_CONTENT_END] 来提前关闭边界标记
+    const cleanedContent = stripBoundaryMarkers(sanitizedContent);
+
+    // 注意: 使用 cleanedContent（脱敏+marker剥离后）而非 sanitizedContent
+    // marker 替换文本 "(boundary marker removed)" 视为有效内容，行为等价于修复前
+    if (isFullyRedacted(input.content, cleanedContent)) {
       log.warn("Content fully redacted, rejecting save", { project });
       return {
         id: "",
@@ -205,8 +236,9 @@ export async function handleSave(
     }
 
     // Step 3: Hash 去重
-    const contentHash = computeHash(sanitizedContent);
-    const hashSet = getHashSet(project);
+    const contentHash = computeHash(cleanedContent);
+    // [FIX M-2]: hashSet key 也使用 slug，与 lock key 一致
+    const hashSet = getHashSet(projectSlug);
 
     if (hashSet.has(contentHash)) {
       log.info("Duplicate content detected", { project, contentHash });
@@ -221,7 +253,7 @@ export async function handleSave(
     // 使用 embedWithMeta() 获取实际使用的 model（降级场景下尤为重要）
     let embeddingResult: EmbeddingResult;
     try {
-      embeddingResult = await deps.embedding.embedWithMeta(sanitizedContent);
+      embeddingResult = await deps.embedding.embedWithMeta(cleanedContent);
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       log.error("Embedding failed, cannot save memory", {
@@ -238,12 +270,15 @@ export async function handleSave(
     // 解构实际使用的向量和模型（降级时 model 会反映真实 Provider）
     const { vector, model: embeddingModel } = embeddingResult;
 
+    // [ADR 补充二十] 生成 BM25 稀疏向量（可选）
+    const sparseVector = deps.bm25?.encode(cleanedContent);
+
     // Step 5: 写入 Qdrant
     const id = randomUUID();
     const now = new Date().toISOString();
 
     const payload: Record<string, unknown> = {
-      content: sanitizedContent,
+      content: cleanedContent,
       content_hash: contentHash,
       project,
       source: input.source ?? "conversation",
@@ -262,7 +297,14 @@ export async function handleSave(
       ...(input.source_line ? { source_line: input.source_line } : {}),
     };
 
-    await deps.qdrant.upsert(project, [{ id, vector, payload }]);
+    await deps.qdrant.upsert(project, [
+      {
+        id,
+        vector,
+        ...(sparseVector ? { sparseVector } : {}),
+        payload,
+      },
+    ]);
 
     // D5-6: 容量管理 — 淘汰过老的 hash 条目
     evictIfNeeded(hashSet);
@@ -294,10 +336,12 @@ export async function handleSave(
 
 /**
  * 清除指定项目的内存 hash 缓存（用于测试）。
+ * [FIX M-2]: 同时支持原始名和 slug 名清理
  */
 export function clearHashCache(project?: string): void {
   if (project) {
-    hashSets.delete(project);
+    // hashSets 的 key 统一为 slugify(project)，因此只需删除 slug 版本
+    hashSets.delete(slugify(project));
   } else {
     hashSets.clear();
   }

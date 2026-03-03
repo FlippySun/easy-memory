@@ -32,7 +32,7 @@ cp .env.example .env
 # ===== Embedding（配置时二选一，非运行时 fallback）[ADR: 破坏性修正①] =====
 EMBEDDING_PROVIDER=ollama             # ollama | openai
 OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=nomic-embed-text         # 768 维
+OLLAMA_MODEL=bge-m3                   # 1024 维
 # OPENAI_API_KEY=sk-...               # 仅 EMBEDDING_PROVIDER=openai
 # OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # 1536 维
 
@@ -113,7 +113,7 @@ volumes:
 ### 4. 预拉 Embedding 模型（首次）
 
 ```bash
-docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull bge-m3
 ```
 
 ### 5. 验证服务就绪
@@ -123,7 +123,7 @@ docker compose exec ollama ollama pull nomic-embed-text
 curl -sf http://localhost:6333/readyz && echo "✅ Qdrant ready"
 
 # Ollama 模型就绪
-docker compose exec ollama ollama list | grep nomic-embed-text
+docker compose exec ollama ollama list | grep bge-m3
 
 # MCP Server 自检（需先构建）
 pnpm build && echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | node dist/index.js
@@ -139,7 +139,7 @@ pnpm build && echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | node dist/
 # ===== 必填 =====
 EMBEDDING_PROVIDER=ollama
 OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_MODEL=nomic-embed-text
+OLLAMA_MODEL=bge-m3
 QDRANT_URL=http://qdrant:6333
 QDRANT_API_KEY=<openssl rand -hex 32>      # ⚠️ 强随机密钥
 PROJECT_SLUG=prod-project
@@ -175,7 +175,7 @@ services:
 networks:
   easy-memory-internal:
     internal: true # ⚠️ 生产环境禁止外部网络访问 [ADR: SEC-4]
-    # 确保已预拉模型: docker compose exec ollama ollama pull nomic-embed-text
+    # 确保已预拉模型: docker compose exec ollama ollama pull bge-m3
 ```
 
 ```bash
@@ -249,9 +249,9 @@ docker compose logs -f ollama
 | 现象                        | 原因                       | 解决                                                                        |
 | --------------------------- | -------------------------- | --------------------------------------------------------------------------- |
 | `EPIPE` write 错误          | IDE 关闭后 stdout 管道断裂 | 正常现象，GracefulShutdown 三层防御已处理 [ADR: 补充五十一]                 |
-| Embedding 首次超时          | Ollama 冷启动下载模型      | 预拉模型 `ollama pull nomic-embed-text`，或等待 async warmup                |
+| Embedding 首次超时          | Ollama 冷启动下载模型      | 预拉模型 `ollama pull bge-m3`，或等待 async warmup                          |
 | Qdrant 连接失败             | 容器未就绪                 | 指数退避自动重连（1s→2s→4s→8s→16s→32s），或增大 `QDRANT_CONNECT_TIMEOUT_MS` |
 | 僵尸 MCP 进程               | stdin 未正确关闭           | 内置 stdin close + SIGTERM 监听 + 5s watchdog 超时强杀 [ADR: 补充四十]      |
 | 记忆搜索无结果              | Embedding 仍在 warmup      | 检查 `memory_status` → `embedding: "warming_up"` 时暂不可搜                 |
 | `status: pending_embedding` | Embedding 服务暂时不可用   | 记忆已暂存 JSONL，RecoveryWorker 恢复后自动 flush [ADR: P0-10]              |
-| 切换模型后向量不兼容        | 向量维度变更 (768↔1536)    | 需执行迁移脚本（Phase 2），不可直接切换 [ADR: LC-10]                        |
+| 切换模型后向量不兼容        | 向量维度变更 (1024↔1536)   | 需执行迁移脚本（Phase 2），不可直接切换 [ADR: LC-10]                        |

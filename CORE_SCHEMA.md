@@ -335,7 +335,7 @@ try { embed via Ollama } catch { embed via OpenAI }
 
 // ✅ 必须 — 配置时选择（启动时确定，运行时不切换）
 const provider = process.env.EMBEDDING_PROVIDER; // "ollama" | "openai"
-// [ADR: 破坏性修正①] — Ollama 768 维 vs OpenAI 1536 维，混用则 Qdrant 向量不兼容
+// [ADR: 破坏性修正①] — bge-m3 1024 维 vs Gemini 1024 维（已统一维度），mixed provider 仍可能导致语义空间不兼容
 ```
 
 ### 3.4 Token 计算 — CJK 二分法

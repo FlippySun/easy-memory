@@ -4,7 +4,7 @@
  *
  * 要求:
  * - Qdrant 运行在 localhost:6333 (API Key: easy-memory-dev)
- * - Ollama 运行在 localhost:11434 (已安装 nomic-embed-text)
+ * - Ollama 运行在 localhost:11434 (已安装 bge-m3)
  *
  * 调用链: save → search → forget → search (验证不可召回)
  */
@@ -20,6 +20,7 @@ import { handleSearch } from "../src/tools/search.js";
 import { handleForget } from "../src/tools/forget.js";
 import { handleStatus } from "../src/tools/status.js";
 import { collectionName } from "../src/types/schema.js";
+import { BM25Encoder } from "../src/services/bm25.js";
 
 const QDRANT_URL = process.env.QDRANT_URL ?? "http://localhost:6333";
 const QDRANT_API_KEY = process.env.QDRANT_API_KEY ?? "easy-memory-dev";
@@ -31,6 +32,7 @@ let embedding: EmbeddingService;
 let deps: {
   qdrant: QdrantService;
   embedding: EmbeddingService;
+  bm25: BM25Encoder;
   defaultProject: string;
 };
 
@@ -76,6 +78,7 @@ describe("E2E: Full Memory CRUD Lifecycle", () => {
     deps = {
       qdrant,
       embedding,
+      bm25: new BM25Encoder(),
       defaultProject: E2E_PROJECT,
     };
 
@@ -121,7 +124,7 @@ describe("E2E: Full Memory CRUD Lifecycle", () => {
     const result = await handleSave(
       {
         content:
-          "The Easy Memory MCP project uses nomic-embed-text for generating 768-dimensional vectors stored in Qdrant.",
+          "The Easy Memory MCP project uses bge-m3 for generating 1024-dimensional vectors stored in Qdrant.",
         source: "manual",
         fact_type: "verified_fact",
         tags: ["architecture", "embedding"],
@@ -157,7 +160,7 @@ describe("E2E: Full Memory CRUD Lifecycle", () => {
     expect(found).toBeDefined();
     expect(found!.content).toContain("[MEMORY_CONTENT_START]");
     expect(found!.content).toContain("[MEMORY_CONTENT_END]");
-    expect(found!.content).toContain("nomic-embed-text");
+    expect(found!.content).toContain("bge-m3");
   });
 
   it("should reject duplicate content via hash dedup", async () => {
@@ -166,7 +169,7 @@ describe("E2E: Full Memory CRUD Lifecycle", () => {
     const result = await handleSave(
       {
         content:
-          "The Easy Memory MCP project uses nomic-embed-text for generating 768-dimensional vectors stored in Qdrant.",
+          "The Easy Memory MCP project uses bge-m3 for generating 1024-dimensional vectors stored in Qdrant.",
         source: "manual",
       },
       deps,
@@ -226,7 +229,7 @@ describe("E2E: Full Memory CRUD Lifecycle", () => {
     // 包含已过期时应能找到已归档记忆
     const found = result.memories.find((m) => m.id === savedMemoryId);
     expect(found).toBeDefined();
-    expect(found!.content).toContain("nomic-embed-text");
+    expect(found!.content).toContain("bge-m3");
   });
 
   it("should downgrade delete to archive in Phase 1", async () => {

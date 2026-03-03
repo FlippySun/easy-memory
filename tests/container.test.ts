@@ -17,7 +17,7 @@ describe("parseAppConfig", () => {
     expect(config.qdrantApiKey).toBe("easy-memory-dev");
     expect(config.embeddingProvider).toBe("ollama");
     expect(config.ollamaBaseUrl).toBe("http://localhost:11434");
-    expect(config.ollamaModel).toBe("nomic-embed-text");
+    expect(config.ollamaModel).toBe("bge-m3");
     expect(config.geminiApiKey).toBe("");
     expect(config.geminiModel).toBe("gemini-embedding-001");
     expect(config.defaultProject).toBe("default");
@@ -135,6 +135,7 @@ describe("createContainer", () => {
     expect(container.qdrant).toBeDefined();
     expect(container.embedding).toBeDefined();
     expect(container.rateLimiter).toBeDefined();
+    expect(container.bm25).toBeDefined();
   });
 
   it("should create container with auto provider", () => {

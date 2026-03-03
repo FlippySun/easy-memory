@@ -35,9 +35,9 @@ export {
  * 用于 save.ts 记录实际使用的模型和 Provider。
  */
 export interface EmbeddingResult {
-  /** 768 维浮点向量 */
+  /** 1024 维浮点向量 */
   vector: number[];
-  /** 实际使用的模型名 (e.g. "nomic-embed-text") */
+  /** 实际使用的模型名 (e.g. "bge-m3") */
   model: string;
   /** 实际使用的 Provider (e.g. "ollama", "gemini") */
   provider: string;

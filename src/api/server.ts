@@ -60,6 +60,7 @@ function createApp(container: AppContainer): Hono<Env> {
   const deps = {
     qdrant,
     embedding,
+    bm25: container.bm25,
     defaultProject: config.defaultProject,
     rateLimiter,
   };

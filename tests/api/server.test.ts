@@ -18,7 +18,7 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     qdrantApiKey: "test-key",
     embeddingProvider: "ollama",
     ollamaBaseUrl: "http://localhost:11434",
-    ollamaModel: "nomic-embed-text",
+    ollamaModel: "bge-m3",
     geminiApiKey: "",
     geminiModel: "gemini-embedding-001",
     defaultProject: "test-project",
@@ -46,19 +46,20 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
       ensureCollection: vi.fn().mockResolvedValue("em_test-project"),
       upsert: vi.fn().mockResolvedValue(undefined),
       search: vi.fn().mockResolvedValue([]),
+      hybridSearch: vi.fn().mockResolvedValue([]),
       setPayload: vi.fn().mockResolvedValue(undefined),
       close: vi.fn(),
     } as any,
     embedding: {
-      embed: vi.fn().mockResolvedValue(new Array(768).fill(0)),
+      embed: vi.fn().mockResolvedValue(new Array(1024).fill(0)),
       embedWithMeta: vi.fn().mockResolvedValue({
-        vector: new Array(768).fill(0),
-        model: "nomic-embed-text",
+        vector: new Array(1024).fill(0),
+        model: "bge-m3",
         provider: "ollama",
       }),
       healthCheck: vi.fn().mockResolvedValue(true),
       close: vi.fn(),
-      modelName: "nomic-embed-text",
+      modelName: "bge-m3",
       primaryProvider: "ollama",
       providerNames: ["ollama"],
     } as any,
@@ -73,6 +74,9 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
         gemini_circuit_open: false,
       }),
       resetDaily: vi.fn(),
+    } as any,
+    bm25: {
+      encode: vi.fn().mockReturnValue({ indices: [100], values: [1.0] }),
     } as any,
   };
 }

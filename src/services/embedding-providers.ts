@@ -3,8 +3,8 @@
  * @description Embedding Provider 策略模式实现。
  *
  * 提供两种 Provider:
- * - OllamaEmbeddingProvider: 本地 Ollama (nomic-embed-text, 768 维)
- * - GeminiEmbeddingProvider: 远端 Gemini (gemini-embedding-001, MRL 768 维)
+ * - OllamaEmbeddingProvider: 本地 Ollama (bge-m3, 1024 维)
+ * - GeminiEmbeddingProvider: 远端 Gemini (gemini-embedding-001, MRL 1024 维)
  *
  * 共同职责:
  * - 超时控制 (AbortController)
@@ -59,7 +59,7 @@ export function validateVector(vector: number[], expectedDim: number): void {
 export interface EmbeddingProvider {
   /** Provider 标识符 (e.g. "ollama", "gemini") */
   readonly name: string;
-  /** 使用的模型名称 (e.g. "nomic-embed-text") */
+  /** 使用的模型名称 (e.g. "bge-m3") */
   readonly modelName: string;
   /** 输出向量维度 */
   readonly dimension: number;
@@ -220,6 +220,7 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
 export interface OllamaProviderConfig extends BaseProviderConfig {
   baseUrl?: string;
   model?: string;
+  dimension?: number;
 }
 
 interface OllamaEmbeddingResponse {
@@ -230,13 +231,13 @@ interface OllamaEmbeddingResponse {
  * Ollama Embedding Provider — 本地推理。
  *
  * - Endpoint: POST /api/embeddings
- * - Model: nomic-embed-text (768 维)
+ * - Model: bge-m3 (1024 维)
  * - 默认超时: 10s, 5 次重试
  */
 export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
   readonly name = "ollama";
   readonly modelName: string;
-  readonly dimension = 768;
+  readonly dimension: number;
   private readonly baseUrl: string;
 
   constructor(config: OllamaProviderConfig = {}) {
@@ -245,7 +246,8 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
       maxRetries: config.maxRetries ?? 5,
     });
     this.baseUrl = config.baseUrl ?? "http://localhost:11434";
-    this.modelName = config.model ?? "nomic-embed-text";
+    this.modelName = config.model ?? "bge-m3";
+    this.dimension = config.dimension ?? 1024;
   }
 
   protected async doFetch(
@@ -283,7 +285,50 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
       const response = await fetch(`${this.baseUrl}/api/tags`, {
         signal: controller.signal,
       });
-      return response.ok;
+      if (!response.ok) return false;
+
+      // [FIX C-3]: 维度探测 — 发送一个短文本获取实际维度
+      // 避免运行时 embed 5 次重试后才发现维度不匹配
+      // 使用独立的 AbortController + 3s timeout，防止 /api/tags 耗尽共享超时
+      try {
+        const probeController = new AbortController();
+        const probeTimeout = setTimeout(() => probeController.abort(), 3000);
+        try {
+          const probeResponse = await fetch(`${this.baseUrl}/api/embeddings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: this.modelName,
+              prompt: "dimension probe",
+            }),
+            signal: probeController.signal,
+          });
+          if (probeResponse.ok) {
+            const data = (await probeResponse.json()) as {
+              embedding?: number[];
+            };
+            if (Array.isArray(data.embedding) && data.embedding.length > 0) {
+              if (data.embedding.length !== this.dimension) {
+                log.error(
+                  `Ollama ${this.modelName} dimension mismatch: actual=${data.embedding.length}, expected=${this.dimension}. ` +
+                    `Check Ollama model version or set OLLAMA_DIMENSION env var.`,
+                );
+                return false;
+              }
+              log.info(
+                `Ollama ${this.modelName} dimension verified: ${data.embedding.length}d`,
+              );
+            }
+          }
+        } finally {
+          clearTimeout(probeTimeout);
+        }
+      } catch {
+        // 探测失败不阻断 healthCheck — 将在首次 embed 时由 validateVector 捕获
+        log.warn("Ollama dimension probe failed, will validate on first embed");
+      }
+
+      return true;
     } catch {
       return false;
     } finally {
@@ -311,7 +356,7 @@ interface GeminiEmbeddingResponse {
  * Gemini Embedding Provider — 远端 Google AI。
  *
  * - Endpoint: POST /v1beta/models/{model}:embedContent
- * - Model: gemini-embedding-001 (MRL → 768 维)
+ * - Model: gemini-embedding-001 (MRL → 1024 维)
  * - 默认超时: 30s (远端网络), 3 次重试
  * - 特殊处理: 429 (Rate Limit) 用更长退避
  */
@@ -332,7 +377,7 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
     }
     this.apiKey = config.apiKey;
     this.modelName = config.model ?? "gemini-embedding-001";
-    this.outputDimensionality = config.outputDimensionality ?? 768;
+    this.outputDimensionality = config.outputDimensionality ?? 1024;
     this.dimension = this.outputDimensionality;
   }
 

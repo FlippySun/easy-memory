@@ -151,7 +151,7 @@ describe("MemorySearchInputSchema", () => {
   it("should parse with defaults", () => {
     const result = MemorySearchInputSchema.parse({ query: "find this" });
     expect(result.limit).toBe(5);
-    expect(result.threshold).toBe(0.65);
+    expect(result.threshold).toBe(0.55);
     expect(result.include_outdated).toBe(false);
   });
 
@@ -259,7 +259,7 @@ describe("collectionName", () => {
 
 describe("THRESHOLDS", () => {
   it("should have correct search defaults", () => {
-    expect(THRESHOLDS.SEARCH_MIN_SCORE).toBe(0.65);
+    expect(THRESHOLDS.SEARCH_MIN_SCORE).toBe(0.55);
     expect(THRESHOLDS.SEARCH_DEFAULT_LIMIT).toBe(5);
     expect(THRESHOLDS.SEARCH_MAX_LIMIT).toBe(20);
   });

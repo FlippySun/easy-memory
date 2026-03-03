@@ -7,8 +7,8 @@
  *   2. 数据管道工程师 — Qdrant 强一致性、多源异构向量的降维与对齐
  *   3. 混沌工程专家(QA) — 极端网络环境、类型破坏和边缘异常
  *
- * 链路 A (远端): Google gemini-embedding-001 API (MRL → 768 维)
- * 链路 B (本地): Ollama nomic-embed-text (原生 768 维)
+ * 链路 A (远端): Google gemini-embedding-001 API (MRL → 1024 维)
+ * 链路 B (本地): Ollama bge-m3 (原生 1024 维)
  *
  * 验证目标:
  *   1. 两条链路各自的 embed → validate → upsert → search → recall 闭环
@@ -78,7 +78,7 @@ const OLLAMA_URL = process.env.OLLAMA_URL ?? `http://${RESOLVED_HOST}:11434`;
  *
  * 不同 Provider 的响应耗时特征完全不同：
  *   - Gemini (远端): 受网络抖动主导，30s 足够覆盖 P99 延迟
- *   - Ollama (本地): 首次请求可能冷启动加载模型 (nomic-embed-text ~270MB)，
+ *   - Ollama (本地): 首次请求可能冷启动加载模型 (bge-m3 ~1.5GB)，
  *     冷启动 120s，后续请求 <5s
  *
  * 策略: 首次请求使用 full timeout，重试时收紧到 30s
@@ -88,9 +88,9 @@ const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS) || 30_000;
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 120_000;
 const MAX_RETRIES = 3;
 
-// 维度配置 — Gemini 使用 MRL 降维到 768，Ollama nomic-embed-text 原生 768
-const GEMINI_DIMENSION = 768;
-const OLLAMA_DIMENSION = 768;
+// 维度配置 — Gemini 使用 MRL 降维到 1024，Ollama bge-m3 原生 1024
+const GEMINI_DIMENSION = 1024;
+const OLLAMA_DIMENSION = 1024;
 
 // 测试隔离标识 (时间戳确保跨次运行不冲突)
 const TEST_RUN_ID = `dual_${Date.now().toString(36)}`;
@@ -223,7 +223,7 @@ interface EmbeddingProvider {
  *
  * 底层兼容:
  *   - Gemini MRL 降维后为 Float32 精度
- *   - Ollama nomic-embed-text 返回 Float32 原生向量
+ *   - Ollama bge-m3 返回 Float32 原生向量
  *   - 两者精度一致，无需额外对齐
  */
 function validateVector(
@@ -416,16 +416,16 @@ class GeminiEmbeddingProvider implements EmbeddingProvider {
 // ============================================================
 
 /**
- * Ollama nomic-embed-text Provider。
+ * Ollama bge-m3 Provider。
  *
  * 特性:
- *   - 原生 768 维 dense vector
+ *   - 原生 1024 维 dense vector
  *   - 使用与现有 src/services/embedding.ts 一致的 API 格式
  *     (POST /api/embeddings, body: { model, prompt })
  *   - 冷启动超时策略: 首次请求 full timeout，后续重试缩短
  *
  * [架构师审查 - 动态超时控制 — 冷启动策略]:
- *   Ollama 首次加载模型 (nomic-embed-text ~270MB) 可能需要 30-120s。
+ *   Ollama 首次加载模型 (bge-m3 ~1.5GB) 可能需要 30-120s。
  *   首次请求给予完整 OLLAMA_TIMEOUT_MS (120s)，
  *   重试时模型已加载，收紧到 30s 避免无意义等待。
  */
@@ -441,7 +441,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
   constructor(
     baseUrl = OLLAMA_URL,
     dimension = OLLAMA_DIMENSION,
-    model = "nomic-embed-text",
+    model = "bge-m3",
     timeoutMs = OLLAMA_TIMEOUT_MS,
     maxRetries = MAX_RETRIES,
   ) {
@@ -565,7 +565,7 @@ function createProvider(name: "gemini" | "ollama"): EmbeddingProvider | null {
  *
  * [数据工程师审查] 维度隔离:
  * 每个 Provider 使用独立 Collection，dimension 参数动态传入。
- * 即使两个 Provider 恰好维度相同 (如都是 768)，仍使用独立 Collection，
+ * 即使两个 Provider 恰好维度相同 (如都是 1024)，仍使用独立 Collection，
  * 因为不同模型的向量空间语义不同，混在一起会导致搜索质量下降。
  */
 async function createCollection(
@@ -849,7 +849,7 @@ describe("Dual-Engine E2E: Gemini + Ollama → Qdrant", () => {
           COLLECTION_OLLAMA,
           ollamaPointId,
           ollamaVector,
-          { ...TEST_PAYLOAD, embedding_model: "nomic-embed-text" },
+          { ...TEST_PAYLOAD, embedding_model: "bge-m3" },
         ),
       );
 
@@ -877,7 +877,7 @@ describe("Dual-Engine E2E: Gemini + Ollama → Qdrant", () => {
       expect(found).toBeDefined();
       expect(found!.payload?.content).toBe(TEST_CONTENT);
       expect(found!.payload?.lifecycle).toBe("active");
-      expect(found!.payload?.embedding_model).toBe("nomic-embed-text");
+      expect(found!.payload?.embedding_model).toBe("bge-m3");
       expect(found!.score).toBeGreaterThan(0.3);
     });
   });
@@ -951,7 +951,7 @@ describe("Dual-Engine E2E: Gemini + Ollama → Qdrant", () => {
       /**
        * [数据工程师审查 - 向量空间语义隔离]
        *
-       * 即便两个 Provider 维度相同 (768)，它们的向量空间语义不同：
+       * 即便两个 Provider 维度相同 (1024)，它们的向量空间语义不同：
        * - Gemini 向量搜索 Ollama Collection：维度匹配但语义不匹配，
        *   可能返回结果但相似度分数应偏低
        * - 重点验证: 搜索结果的 payload 数据不被跨引擎版本覆盖
@@ -970,7 +970,7 @@ describe("Dual-Engine E2E: Gemini + Ollama → Qdrant", () => {
           for (const r of crossResults) {
             // 不管跨引擎搜索是否返回结果，payload 的 embedding_model
             // 应该始终是 Ollama 的标记（因为我们搜索的是 Ollama Collection）
-            expect(r.payload?.embedding_model).toBe("nomic-embed-text");
+            expect(r.payload?.embedding_model).toBe("bge-m3");
           }
         }
       } else {
@@ -1004,7 +1004,7 @@ function printReviewReport(): void {
   理由:
     - Named Vectors 增加 Schema 复杂度，对 MVP 阶段收益不大
     - 独立 Collection 天然隔离不同模型的向量空间
-    - 即便维度相同 (如 Gemini MRL→768 & Ollama→768)，
+    - 即便维度相同 (如 Gemini MRL→1024 & Ollama→1024)，
       不同模型的语义空间互不兼容，混排会严重降低搜索质量
 
   Collection 命名规则: e2e_{provider}_{timestamp_base36}

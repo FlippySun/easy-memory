@@ -91,6 +91,7 @@ function registerTools(server: McpServer, container: AppContainer): void {
   const deps = {
     qdrant,
     embedding,
+    bm25: container.bm25,
     defaultProject,
     rateLimiter,
   };
@@ -189,7 +190,7 @@ function registerTools(server: McpServer, container: AppContainer): void {
         .min(0)
         .max(1)
         .optional()
-        .describe("Minimum similarity score (default: 0.65)"),
+        .describe("Minimum similarity score (default: 0.55)"),
       include_outdated: z
         .boolean()
         .optional()
@@ -317,7 +318,16 @@ export async function startMcpShell(container: AppContainer): Promise<void> {
 
   const transport = new SafeStdioTransport();
 
-  // 优雅关闭 — MCP 模式: 监听 stdin 事件
+  // 启动前验证 Qdrant 连接
+  await container.qdrant.ensureConnected();
+
+  // 🔑 关键顺序: 必须先 connect(transport)，让 SDK 在 stdin 上注册 data 监听器，
+  // 然后再调用 setupGracefulShutdown（它会 process.stdin.resume()）。
+  // 如果顺序反过来，resume() 会让 stdin 提前进入 flowing 模式，
+  // 导致 VS Code 发来的 initialize 消息在 data 监听器注册前被丢弃。
+  await server.connect(transport);
+
+  // 优雅关闭 — MCP 模式: 监听 stdin close/end 事件
   setupGracefulShutdown(
     async () => {
       log.info("Shutting down MCP server");
@@ -329,9 +339,5 @@ export async function startMcpShell(container: AppContainer): Promise<void> {
     },
   );
 
-  // 启动前验证 Qdrant 连接
-  await container.qdrant.ensureConnected();
-
-  await server.connect(transport);
   log.info("Easy Memory MCP Server is running (MCP mode)");
 }

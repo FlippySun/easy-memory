@@ -45,20 +45,26 @@ function createSaveDeps(): SaveHandlerDeps {
       upsert: vi.fn().mockResolvedValue(undefined),
       ensureCollection: vi.fn().mockResolvedValue("em_test"),
       search: vi.fn().mockResolvedValue([]),
+      hybridSearch: vi.fn().mockResolvedValue([]),
       setPayload: vi.fn().mockResolvedValue(undefined),
       healthCheck: vi.fn().mockResolvedValue(true),
       getCollectionInfo: vi.fn().mockResolvedValue(null),
     } as unknown as SaveHandlerDeps["qdrant"],
     embedding: {
-      embed: vi.fn().mockResolvedValue(new Array(768).fill(0.1)),
+      embed: vi.fn().mockResolvedValue(new Array(1024).fill(0.1)),
       embedWithMeta: vi.fn().mockResolvedValue({
-        vector: new Array(768).fill(0.1),
-        model: "nomic-embed-text",
+        vector: new Array(1024).fill(0.1),
+        model: "bge-m3",
         provider: "ollama",
       }),
       healthCheck: vi.fn().mockResolvedValue(true),
       close: vi.fn(),
     } as unknown as SaveHandlerDeps["embedding"],
+    bm25: {
+      encode: vi
+        .fn()
+        .mockReturnValue({ indices: [100, 200], values: [1.0, 0.5] }),
+    } as unknown as SaveHandlerDeps["bm25"],
     defaultProject: "test-project",
   };
 }
@@ -67,6 +73,7 @@ function createSearchDeps(): SearchHandlerDeps {
   return {
     qdrant: {
       search: vi.fn().mockResolvedValue([]),
+      hybridSearch: vi.fn().mockResolvedValue([]),
       ensureCollection: vi.fn().mockResolvedValue("em_test"),
       upsert: vi.fn(),
       setPayload: vi.fn().mockResolvedValue(undefined),
@@ -74,14 +81,19 @@ function createSearchDeps(): SearchHandlerDeps {
       getCollectionInfo: vi.fn().mockResolvedValue(null),
     } as unknown as SearchHandlerDeps["qdrant"],
     embedding: {
-      embed: vi.fn().mockResolvedValue(new Array(768).fill(0.1)),
+      embed: vi.fn().mockResolvedValue(new Array(1024).fill(0.1)),
       embedWithMeta: vi.fn().mockResolvedValue({
-        vector: new Array(768).fill(0.1),
-        model: "nomic-embed-text",
+        vector: new Array(1024).fill(0.1),
+        model: "bge-m3",
         provider: "ollama",
       }),
       healthCheck: vi.fn().mockResolvedValue(true),
     } as unknown as SearchHandlerDeps["embedding"],
+    bm25: {
+      encode: vi
+        .fn()
+        .mockReturnValue({ indices: [100, 200], values: [1.0, 0.5] }),
+    } as unknown as SearchHandlerDeps["bm25"],
     defaultProject: "test-project",
   };
 }
@@ -93,6 +105,7 @@ function createForgetDeps(): ForgetHandlerDeps {
       ensureCollection: vi.fn().mockResolvedValue("em_test"),
       upsert: vi.fn(),
       search: vi.fn(),
+      hybridSearch: vi.fn().mockResolvedValue([]),
       healthCheck: vi.fn().mockResolvedValue(true),
       getCollectionInfo: vi.fn().mockResolvedValue(null),
     } as unknown as ForgetHandlerDeps["qdrant"],
@@ -134,7 +147,7 @@ describe("Audit #1: 向量库读写", () => {
       .calls[0]!;
     const points = upsertCall[1];
     expect(Array.isArray(points[0].vector)).toBe(true);
-    expect(points[0].vector.length).toBe(768);
+    expect(points[0].vector.length).toBe(1024);
   });
 });
 
@@ -203,8 +216,8 @@ describe("Audit #2: 记忆污染", () => {
         });
       }
       return Promise.resolve({
-        vector: new Array(768).fill(0.2),
-        model: "nomic-embed-text",
+        vector: new Array(1024).fill(0.2),
+        model: "bge-m3",
         provider: "ollama",
       });
     });
@@ -219,8 +232,8 @@ describe("Audit #2: 记忆污染", () => {
 
     // 释放 p1 的 embed
     resolveEmbed({
-      vector: new Array(768).fill(0.1),
-      model: "nomic-embed-text",
+      vector: new Array(1024).fill(0.1),
+      model: "bge-m3",
       provider: "ollama",
     });
 
@@ -239,9 +252,9 @@ describe("Audit #3: 检索错位", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test" }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    const filter = searchCall[2]?.filter;
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const filter = searchCall[3]?.filter;
     expect(filter).toBeDefined();
     expect(filter.must).toEqual(
       expect.arrayContaining([
@@ -257,9 +270,9 @@ describe("Audit #3: 检索错位", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test", include_outdated: true }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    const filter = searchCall[2]?.filter;
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const filter = searchCall[3]?.filter;
     expect(filter.must).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -270,14 +283,14 @@ describe("Audit #3: 检索错位", () => {
     );
   });
 
-  it("should use default threshold of 0.65", async () => {
+  it("should use default threshold of 0.55", async () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test" }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    expect(searchCall[2]).toEqual(
-      expect.objectContaining({ scoreThreshold: 0.65 }),
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    expect(searchCall[3]).toEqual(
+      expect.objectContaining({ scoreThreshold: 0.55 }),
     );
   });
 
@@ -382,13 +395,15 @@ describe("Audit #5: 自动化失控", () => {
 describe("Audit #6: 过期记忆×自动执行", () => {
   it("should filter out archived memories by default in search", async () => {
     const deps = createSearchDeps();
-    (deps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    (
+      deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([]);
 
     await handleSearch({ query: "test", include_outdated: false }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    const filter = searchCall[2]?.filter;
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const filter = searchCall[3]?.filter;
     const lifecycleCondition = filter.must.find(
       (c: Record<string, unknown>) =>
         (c as { key: string }).key === "lifecycle",
@@ -478,9 +493,13 @@ describe("Audit #8: 多租户串库防护", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test", project: "isolated-proj" }, deps);
 
-    expect(deps.qdrant.search).toHaveBeenCalledWith(
+    expect(deps.qdrant.hybridSearch).toHaveBeenCalledWith(
       "isolated-proj",
       expect.any(Array),
+      expect.objectContaining({
+        indices: expect.any(Array),
+        values: expect.any(Array),
+      }),
       expect.any(Object),
     );
   });
@@ -512,7 +531,7 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
     const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
       .calls[0]!;
     const payload = upsertCall[1][0].payload;
-    expect(payload.embedding_model).toBe("nomic-embed-text");
+    expect(payload.embedding_model).toBe("bge-m3");
   });
 
   it("should store actual fallback model when primary fails", async () => {
@@ -520,7 +539,7 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
     (
       deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
     ).mockResolvedValueOnce({
-      vector: new Array(768).fill(0.3),
+      vector: new Array(1024).fill(0.3),
       model: "gemini-embedding-001", // Fallback happened, Gemini was used
       provider: "gemini",
     });
@@ -539,12 +558,14 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
     (
       deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
     ).mockResolvedValueOnce({
-      vector: new Array(768).fill(0.1),
-      model: "nomic-embed-text",
+      vector: new Array(1024).fill(0.1),
+      model: "bge-m3",
       provider: "ollama",
     });
 
-    (deps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    (
+      deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
       {
         id: "uuid-mismatch",
         score: 0.85,
@@ -563,7 +584,7 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
 
     const result = await handleSearch({ query: "test" }, deps);
     expect(result.system_note).toContain("警告");
-    expect(result.system_note).toContain("nomic-embed-text");
+    expect(result.system_note).toContain("bge-m3");
   });
 });
 
@@ -573,7 +594,9 @@ describe("Audit #9: 模型升级×向量不兼容", () => {
 describe("Audit #10: Copilot 可控注入防护", () => {
   it("should wrap memory content in boundary markers", async () => {
     const deps = createSearchDeps();
-    (deps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    (
+      deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
       {
         id: "uuid-boundary",
         score: 0.9,
@@ -909,7 +932,9 @@ describe("Audit #17: Memory Trust Score", () => {
 
   it("should return confidence in search results", async () => {
     const deps = createSearchDeps();
-    (deps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    (
+      deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
       {
         id: "uuid-trust",
         score: 0.9,
@@ -1007,7 +1032,9 @@ describe("Audit #18: 写入门禁", () => {
 describe("Audit #19: 回答门禁", () => {
   it("should wrap all memory content in boundary markers", async () => {
     const deps = createSearchDeps();
-    (deps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    (
+      deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
       {
         id: "uuid-1",
         score: 0.9,
@@ -1054,9 +1081,9 @@ describe("Audit #19: 回答门禁", () => {
     const deps = createSearchDeps();
     await handleSearch({ query: "test" }, deps);
 
-    const searchCall = (deps.qdrant.search as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    const filter = searchCall[2]?.filter;
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const filter = searchCall[3]?.filter;
     const lifecycleMatch = filter.must.find(
       (c: { key: string }) => c.key === "lifecycle",
     );
@@ -1065,7 +1092,9 @@ describe("Audit #19: 回答门禁", () => {
 
   it("should return fact_type and lifecycle in each result", async () => {
     const deps = createSearchDeps();
-    (deps.qdrant.search as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    (
+      deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
       {
         id: "uuid-meta",
         score: 0.85,
@@ -1188,7 +1217,7 @@ describe("Audit: 完整管道集成验证", () => {
     // Search (mock returns the saved memory)
     const searchDeps = createSearchDeps();
     (
-      searchDeps.qdrant.search as ReturnType<typeof vi.fn>
+      searchDeps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
     ).mockResolvedValueOnce([
       {
         id: saveResult.id,
@@ -1201,7 +1230,7 @@ describe("Audit: 完整管道集成验证", () => {
           confidence: 0.9,
           lifecycle: "active",
           created_at: new Date().toISOString(),
-          embedding_model: "nomic-embed-text",
+          embedding_model: "bge-m3",
         },
       },
     ]);
@@ -1230,7 +1259,7 @@ describe("Audit: 完整管道集成验证", () => {
 
     // Search again (should not find archived memory)
     (
-      searchDeps.qdrant.search as ReturnType<typeof vi.fn>
+      searchDeps.qdrant.hybridSearch as ReturnType<typeof vi.fn>
     ).mockResolvedValueOnce([]);
     const searchResult2 = await handleSearch(
       {

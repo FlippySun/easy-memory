@@ -89,6 +89,20 @@ describe("handleForget", () => {
     expect(result.message).toContain("Failed");
   });
 
+  it("should return not_found on Qdrant 'Not Found' (uppercase) error", async () => {
+    (deps.qdrant.setPayload as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Not Found"),
+    );
+
+    const result = await handleForget(
+      { id: VALID_UUID, action: "archive", reason: "test" },
+      deps,
+    );
+
+    expect(result.status).toBe("not_found");
+    expect(result.message).toContain("Not Found");
+  });
+
   it("should return error for invalid UUID", async () => {
     const result = await handleForget(
       { id: "not-a-uuid", action: "archive", reason: "test" },

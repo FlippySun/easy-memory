@@ -24,8 +24,8 @@ function createMockProvider(
   overrides: Partial<EmbeddingProvider> & { name: string; modelName: string },
 ): EmbeddingProvider {
   return {
-    dimension: 768,
-    embed: vi.fn().mockResolvedValue(new Array(768).fill(0.1)),
+    dimension: 1024,
+    embed: vi.fn().mockResolvedValue(new Array(1024).fill(0.1)),
     healthCheck: vi.fn().mockResolvedValue(true),
     close: vi.fn(),
     ...overrides,
@@ -47,7 +47,7 @@ describe("EmbeddingService (Unified Facade)", () => {
     });
     fallbackProvider = createMockProvider({
       name: "ollama",
-      modelName: "nomic-embed-text",
+      modelName: "bge-m3",
     });
   });
 
@@ -80,7 +80,7 @@ describe("EmbeddingService (Unified Facade)", () => {
     it("should return vector from primary provider", async () => {
       const service = new EmbeddingService({ providers: [primaryProvider] });
       const vector = await service.embed("test");
-      expect(vector).toHaveLength(768);
+      expect(vector).toHaveLength(1024);
       expect(primaryProvider.embed).toHaveBeenCalledWith("test");
     });
 
@@ -103,7 +103,7 @@ describe("EmbeddingService (Unified Facade)", () => {
         model: "gemini-embedding-001",
         provider: "gemini",
       });
-      expect(result.vector).toHaveLength(768);
+      expect(result.vector).toHaveLength(1024);
     });
 
     it("should return fallback provider metadata on fallback", async () => {
@@ -115,7 +115,7 @@ describe("EmbeddingService (Unified Facade)", () => {
         providers: [primaryProvider, fallbackProvider],
       });
       const result = await service.embedWithMeta("test");
-      expect(result.model).toBe("nomic-embed-text");
+      expect(result.model).toBe("bge-m3");
       expect(result.provider).toBe("ollama");
     });
   });
@@ -132,7 +132,7 @@ describe("EmbeddingService (Unified Facade)", () => {
         providers: [primaryProvider, fallbackProvider],
       });
       const vector = await service.embed("test");
-      expect(vector).toHaveLength(768);
+      expect(vector).toHaveLength(1024);
       expect(primaryProvider.embed).toHaveBeenCalledTimes(1);
       expect(fallbackProvider.embed).toHaveBeenCalledTimes(1);
     });
@@ -175,7 +175,7 @@ describe("EmbeddingService (Unified Facade)", () => {
         providers: [primaryProvider, fallbackProvider],
       });
       const vector = await service.embed("test");
-      expect(vector).toHaveLength(768);
+      expect(vector).toHaveLength(1024);
     });
 
     it("should not try fallback with single provider", async () => {
@@ -319,7 +319,7 @@ describe("EmbeddingService (Unified Facade)", () => {
       expect(primaryProvider.embed).not.toHaveBeenCalled();
       expect(fallbackProvider.embed).toHaveBeenCalledWith("test");
       expect(result.provider).toBe("ollama");
-      expect(result.model).toBe("nomic-embed-text");
+      expect(result.model).toBe("bge-m3");
     });
 
     it("should throw when all providers are filtered out", async () => {
@@ -392,7 +392,7 @@ describe("EmbeddingService (Unified Facade)", () => {
       expect(onSuccess).toHaveBeenCalledWith(
         expect.objectContaining({
           provider: "ollama",
-          model: "nomic-embed-text",
+          model: "bge-m3",
         }),
       );
     });
@@ -415,7 +415,7 @@ describe("EmbeddingService (Unified Facade)", () => {
       });
       // 不传 onSuccess — 应正常工作不报错
       const result = await service.embedWithMeta("test");
-      expect(result.vector).toHaveLength(768);
+      expect(result.vector).toHaveLength(1024);
     });
   });
 });

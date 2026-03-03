@@ -16,33 +16,35 @@ import {
 
 describe("validateVector", () => {
   it("should pass for correct vector", () => {
-    expect(() => validateVector(new Array(768).fill(0.1), 768)).not.toThrow();
+    expect(() => validateVector(new Array(1024).fill(0.1), 1024)).not.toThrow();
   });
 
   it("should throw on dimension mismatch", () => {
-    expect(() => validateVector([0.1, 0.2], 768)).toThrow("dimension mismatch");
+    expect(() => validateVector([0.1, 0.2], 1024)).toThrow(
+      "dimension mismatch",
+    );
   });
 
   it("should throw on NaN value", () => {
-    const vec = new Array(768).fill(0.1);
+    const vec = new Array(1024).fill(0.1);
     vec[100] = NaN;
-    expect(() => validateVector(vec, 768)).toThrow("NaN");
+    expect(() => validateVector(vec, 1024)).toThrow("NaN");
   });
 
   it("should throw on Infinity value", () => {
-    const vec = new Array(768).fill(0.1);
+    const vec = new Array(1024).fill(0.1);
     vec[50] = Infinity;
-    expect(() => validateVector(vec, 768)).toThrow("Infinity");
+    expect(() => validateVector(vec, 1024)).toThrow("Infinity");
   });
 
   it("should throw on negative Infinity", () => {
-    const vec = new Array(768).fill(0.1);
+    const vec = new Array(1024).fill(0.1);
     vec[0] = -Infinity;
-    expect(() => validateVector(vec, 768)).toThrow("Infinity");
+    expect(() => validateVector(vec, 1024)).toThrow("Infinity");
   });
 
   it("should pass for zero vector", () => {
-    expect(() => validateVector(new Array(768).fill(0), 768)).not.toThrow();
+    expect(() => validateVector(new Array(1024).fill(0), 1024)).not.toThrow();
   });
 });
 
@@ -66,8 +68,8 @@ describe("OllamaEmbeddingProvider", () => {
   it("should create with default config", () => {
     const provider = new OllamaEmbeddingProvider();
     expect(provider.name).toBe("ollama");
-    expect(provider.modelName).toBe("nomic-embed-text");
-    expect(provider.dimension).toBe(768);
+    expect(provider.modelName).toBe("bge-m3");
+    expect(provider.dimension).toBe(1024);
   });
 
   it("should create with custom config", () => {
@@ -81,7 +83,7 @@ describe("OllamaEmbeddingProvider", () => {
   it("should call Ollama API with correct parameters", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ embedding: new Array(768).fill(0.1) }),
+      json: async () => ({ embedding: new Array(1024).fill(0.1) }),
     });
     globalThis.fetch = mockFetch;
 
@@ -101,7 +103,7 @@ describe("OllamaEmbeddingProvider", () => {
   });
 
   it("should return embedding vector on success", async () => {
-    const expectedVector = new Array(768).fill(0.5);
+    const expectedVector = new Array(1024).fill(0.5);
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ embedding: expectedVector }),
@@ -110,7 +112,7 @@ describe("OllamaEmbeddingProvider", () => {
     const provider = new OllamaEmbeddingProvider();
     const result = await provider.embed("test");
     expect(result).toEqual(expectedVector);
-    expect(result).toHaveLength(768);
+    expect(result).toHaveLength(1024);
   });
 
   it("should retry on failure with exponential backoff", async () => {
@@ -122,13 +124,13 @@ describe("OllamaEmbeddingProvider", () => {
       }
       return {
         ok: true,
-        json: async () => ({ embedding: new Array(768).fill(0.1) }),
+        json: async () => ({ embedding: new Array(1024).fill(0.1) }),
       };
     });
 
     const provider = new OllamaEmbeddingProvider({ maxRetries: 3 });
     const result = await provider.embed("retry test");
-    expect(result).toHaveLength(768);
+    expect(result).toHaveLength(1024);
     expect(callCount).toBe(3);
   });
 
@@ -237,8 +239,20 @@ describe("OllamaEmbeddingProvider", () => {
   });
 
   describe("healthCheck", () => {
-    it("should return true when Ollama is reachable", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+    it("should return true when Ollama is reachable and dimension matches", async () => {
+      let callIndex = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+        callIndex++;
+        if (callIndex === 1) {
+          // /api/tags
+          return { ok: true };
+        }
+        // /api/embeddings probe
+        return {
+          ok: true,
+          json: async () => ({ embedding: new Array(1024).fill(0.1) }),
+        };
+      });
       const provider = new OllamaEmbeddingProvider();
       expect(await provider.healthCheck()).toBe(true);
     });
@@ -247,6 +261,39 @@ describe("OllamaEmbeddingProvider", () => {
       globalThis.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
       const provider = new OllamaEmbeddingProvider();
       expect(await provider.healthCheck()).toBe(false);
+    });
+
+    // [FIX C-3]: 维度探测
+    it("should return false when dimension probe reveals mismatch", async () => {
+      let callIndex = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        callIndex++;
+        if (callIndex === 1) {
+          return { ok: true };
+        }
+        // Probe returns 768d instead of expected 1024d
+        return {
+          ok: true,
+          json: async () => ({ embedding: new Array(768).fill(0.1) }),
+        };
+      });
+      const provider = new OllamaEmbeddingProvider({ dimension: 1024 });
+      expect(await provider.healthCheck()).toBe(false);
+    });
+
+    it("should still pass healthCheck if probe request fails (graceful degradation)", async () => {
+      let callIndex = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        callIndex++;
+        if (callIndex === 1) {
+          return { ok: true };
+        }
+        // Probe fails
+        throw new Error("model not found");
+      });
+      const provider = new OllamaEmbeddingProvider();
+      // Should still return true — probe failure is non-fatal
+      expect(await provider.healthCheck()).toBe(true);
     });
 
     it("should abort healthCheck when close() is called during check", async () => {
@@ -301,7 +348,7 @@ describe("GeminiEmbeddingProvider", () => {
     const provider = new GeminiEmbeddingProvider({ apiKey: "test-key" });
     expect(provider.name).toBe("gemini");
     expect(provider.modelName).toBe("gemini-embedding-001");
-    expect(provider.dimension).toBe(768);
+    expect(provider.dimension).toBe(1024);
   });
 
   it("should create with custom config", () => {
@@ -318,7 +365,7 @@ describe("GeminiEmbeddingProvider", () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        embedding: { values: new Array(768).fill(0.2) },
+        embedding: { values: new Array(1024).fill(0.2) },
       }),
     });
     globalThis.fetch = mockFetch;
@@ -326,7 +373,7 @@ describe("GeminiEmbeddingProvider", () => {
     const provider = new GeminiEmbeddingProvider({
       apiKey: "test-key",
       model: "gemini-embedding-001",
-      outputDimensionality: 768,
+      outputDimensionality: 1024,
     });
     await provider.embed("hello gemini");
 
@@ -338,12 +385,12 @@ describe("GeminiEmbeddingProvider", () => {
     const body = JSON.parse(options.body as string);
     expect(body).toEqual({
       content: { parts: [{ text: "hello gemini" }] },
-      outputDimensionality: 768,
+      outputDimensionality: 1024,
     });
   });
 
   it("should return embedding vector on success", async () => {
-    const expectedVector = new Array(768).fill(0.3);
+    const expectedVector = new Array(1024).fill(0.3);
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ embedding: { values: expectedVector } }),
@@ -352,7 +399,7 @@ describe("GeminiEmbeddingProvider", () => {
     const provider = new GeminiEmbeddingProvider({ apiKey: "k" });
     const result = await provider.embed("test");
     expect(result).toEqual(expectedVector);
-    expect(result).toHaveLength(768);
+    expect(result).toHaveLength(1024);
   });
 
   it("should handle 429 rate limit", async () => {
@@ -365,7 +412,7 @@ describe("GeminiEmbeddingProvider", () => {
       return {
         ok: true,
         json: async () => ({
-          embedding: { values: new Array(768).fill(0.1) },
+          embedding: { values: new Array(1024).fill(0.1) },
         }),
       };
     });
@@ -375,7 +422,7 @@ describe("GeminiEmbeddingProvider", () => {
       maxRetries: 2,
     });
     const result = await provider.embed("rate limited");
-    expect(result).toHaveLength(768);
+    expect(result).toHaveLength(1024);
     expect(callCount).toBe(2);
   });
 

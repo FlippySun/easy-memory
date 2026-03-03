@@ -9,7 +9,7 @@
 > 运行时 TypeScript (Node.js) MCP SDK 官方首选，单一运行时部署简单
 > 向量数据库 Qdrant (Docker) 单容器部署、支持 Dense+Sparse 混合向量、Payload Filter 极强、~200MB 内存
 > Embedding 双轨制：Ollama (本地免费) + OpenAI API (可选高质量) 兼顾免费自托管和质量优先两种需求
-> Embedding 模型 nomic-embed-text (768维) / text-embedding-3-small (1536维) 性价比最优
+> Embedding 模型 bge-m3 (1024维) / text-embedding-3-small (1536维) 性价比最优
 > 分块 递归语义分块 + 10-20% overlap 按语义边界切割，代码变更按 commit 为自然单元
 > VPS 最低配置
 > 组件 CPU RAM Disk

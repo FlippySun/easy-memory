@@ -7780,3 +7780,926 @@ EmbeddingService.embedWithMeta()
 - `tests/utils/rate-limiter.test.ts`: 17 个测试（滑动窗口、熔断触发/恢复、日限制、统计）
 - `tests/services/embedding.test.ts`: 8 个新测试（shouldUseProvider 过滤、onSuccess 回调）
 - `tests/tools/status.test.ts`: 2 个新测试（cost_guard 有/无 rateLimiter）
+
+---
+
+## ADR 补充二十: 混合检索架构升级 — bge-m3 + Dense/Sparse/RRF + Reranker
+
+**日期**: 2025-07-26
+**状态**: 🔵 方案设计完成，待实施
+**决策类别**: 检索架构 · Embedding 模型升级 · 混合搜索 · Reranker 集成
+
+---
+
+### 多智能体推演摘要
+
+| Agent 角色           | 核心审查点                                     | 关键发现                                                                               |
+| -------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **分布式系统 Agent** | 数据迁移原子性、Collection 兼容性              | 🔴 匿名 768d → Named 1024d+Sparse 必须重建 Collection，不可原地升级                    |
+| **性能预算 Agent**   | bge-m3 推理延迟、双向量生成开销                | 🟡 bge-m3 (~2.3GB) 比 nomic-embed-text (274MB) 大 8 倍，推理延迟约 150-300ms（可接受） |
+| **安全 Agent**       | Reranker sidecar 攻击面、Sparse token 可逆性   | 🟡 Reranker sidecar 需 Docker 网络隔离，与 Qdrant 同等安全策略                         |
+| **兼容性 Agent**     | API 变更、Provider 接口演进、Gemini 维度对齐   | 🔴 Gemini 768d → 1024d 需同步调整，否则 auto 模式向量空间不一致                        |
+| **代码架构 Agent**   | SparseEncoder 职责边界、QdrantService 接口扩展 | 🟡 SparseEncoder 是独立服务，不走 EmbeddingProvider 接口（职责不同）                   |
+| **总控 Agent**       | 方案整体可行性与实施顺序                       | ✅ 分 4 阶段渐进实施，每阶段可独立回滚                                                 |
+
+---
+
+### 一、升级背景与动机
+
+#### 1.1 现有问题
+
+| 问题                        | 现状                                                           | 影响                                 |
+| --------------------------- | -------------------------------------------------------------- | ------------------------------------ |
+| **中文语义检索质量差**      | nomic-embed-text 是英文优先模型，中文 tokenization 粗糙        | 中文记忆检索召回率低，相关性评分偏离 |
+| **代码标识符无法精确匹配**  | 纯 Dense 向量搜索，`user_profile_id` 被 tokenize 后语义稀释    | 变量名、函数名无法精确召回           |
+| **无混合检索**              | 白皮书（§四 Layer 2）规划了 Dense+Sparse+RRF，当前仅实现 Dense | 不符合设计规格，单一算法存在盲区     |
+| **Gemini 双引擎维度未对齐** | Ollama 768d + Gemini 768d MRL，但 bge-m3 输出 1024d            | auto 模式降级时向量空间不一致        |
+
+#### 1.2 目标状态
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    升级后检索管道                              │
+│                                                              │
+│  Query ─┬─ Dense Embedding (bge-m3, 1024d) ─┐               │
+│          │                                    │               │
+│          └─ Sparse Encoding (BM25/TF) ───────┤               │
+│                                               ▼               │
+│                                   ┌──────────────────┐       │
+│                                   │ Qdrant Prefetch   │       │
+│                                   │ + RRF Fusion      │       │
+│                                   └────────┬─────────┘       │
+│                                            ▼                  │
+│                                   ┌──────────────────┐       │
+│                                   │ Reranker (可选)   │       │
+│                                   │ bge-reranker-v2-m3│       │
+│                                   └────────┬─────────┘       │
+│                                            ▼                  │
+│                                      Top-K 结果               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 二、Embedding 模型切换: nomic-embed-text → bge-m3
+
+#### 2.1 模型对比
+
+| 属性                  | nomic-embed-text                  | BAAI/bge-m3                     |
+| --------------------- | --------------------------------- | ------------------------------- |
+| 维度                  | 768                               | 1024                            |
+| 模型大小              | 274 MB                            | ~2.3 GB                         |
+| 推理延迟 (Ollama, M4) | ~50ms                             | ~150-300ms                      |
+| 中文支持              | 弱（英文优先 tokenizer）          | 强（多语言 + 中英混合训练）     |
+| 多模态输出            | Dense only                        | Dense + Sparse + ColBERT (原生) |
+| Ollama 可用           | ✅ `ollama pull nomic-embed-text` | ✅ `ollama pull bge-m3`         |
+| Ollama API 输出       | Dense vector (768d)               | **仅 Dense vector (1024d)** ⚠️  |
+
+#### 2.2 关键约束: Ollama 仅输出 Dense 向量
+
+🔴 **这是本方案最关键的技术约束**：
+
+bge-m3 原生支持同时输出 Dense + Sparse + ColBERT 三种表征，但 **Ollama 的 `/api/embeddings` 端点仅返回 Dense 向量**（单个 `embedding: number[]`）。bge-m3 的 Sparse 输出（基于 learned sparse retrieval）在 Ollama 中**不可访问**。
+
+**影响**：
+
+- 不能直接使用 bge-m3 原生的 Sparse 表征
+- 必须在 TypeScript 侧自建 BM25 稀疏编码器
+- 这意味着 Sparse 质量取决于我们自建的 BM25 分词器，而非 bge-m3 的学习型 Sparse
+
+**为什么仍然选择 bge-m3**：
+
+1. 其 1024d Dense 向量在中文语义上显著优于 nomic-embed-text
+2. 自建 BM25 Sparse 编码器对代码标识符（snake_case, camelCase）的匹配效果可能**优于**模型学习的 Sparse（因为我们可以定制 tokenizer）
+3. 未来如果 Ollama 支持 multi-output 或我们切换到 Python inference，可无缝升级到原生 Sparse
+
+#### 2.3 OllamaEmbeddingProvider 改造
+
+**当前代码** (`src/services/embedding-providers.ts`):
+
+```typescript
+export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
+  readonly dimension = 768; // ❌ 硬编码
+  // ...
+}
+```
+
+**改造方案**:
+
+```typescript
+export interface OllamaProviderConfig extends BaseProviderConfig {
+  baseUrl?: string;
+  model?: string;
+  dimension?: number; // 新增: 可配置维度
+}
+
+export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
+  readonly dimension: number; // ✅ 可配置
+
+  constructor(config: OllamaProviderConfig = {}) {
+    super({ ... });
+    this.modelName = config.model ?? "bge-m3"; // 默认改为 bge-m3
+    this.dimension = config.dimension ?? MODEL_DIMENSIONS[this.modelName] ?? 1024;
+  }
+}
+
+// 模型维度映射表 — 防止用户忘记配置维度
+const MODEL_DIMENSIONS: Record<string, number> = {
+  "nomic-embed-text": 768,
+  "bge-m3": 1024,
+  "mxbai-embed-large": 1024,
+};
+```
+
+#### 2.4 环境变量变更
+
+| 变量            | 旧默认值           | 新默认值 | 说明                  |
+| --------------- | ------------------ | -------- | --------------------- |
+| `OLLAMA_MODEL`  | `nomic-embed-text` | `bge-m3` | Ollama Embedding 模型 |
+| `EMBEDDING_DIM` | — (硬编码 768)     | `1024`   | 新增: 向量维度配置    |
+
+---
+
+### 三、TypeScript BM25 稀疏编码器
+
+#### 3.1 设计目标
+
+由于 Ollama 不输出 Sparse 向量（§2.2），我们需要自建 BM25 风格的稀疏编码器。此编码器的核心优势在于：**可以定制面向代码的 tokenizer**，比通用 Sparse 模型更适合代码标识符匹配。
+
+#### 3.2 新增文件: `src/services/sparse-encoder.ts`
+
+```typescript
+/**
+ * @module sparse-encoder
+ * @description BM25 风格的稀疏向量编码器 — 面向代码的 tokenizer。
+ *
+ * 核心能力:
+ * - camelCase / PascalCase 感知分词 (getHTTPResponse → [get, HTTP, Response])
+ * - snake_case 感知分词 (user_profile_id → [user, profile, id])
+ * - 保留连字符 (k8s-deployment → [k8s, deployment, k8s-deployment])
+ * - Token → uint32 MurmurHash3 映射 (Qdrant sparse index 使用整数索引)
+ * - TF 加权 (Qdrant 服务端通过 modifier:"idf" 自动补充 IDF 权重)
+ */
+
+export interface SparseVector {
+  indices: number[]; // uint32 hash 索引
+  values: number[]; // TF 权重
+}
+
+export interface SparseEncoderConfig {
+  /** 最小 token 长度 (过滤噪声) */
+  minTokenLength?: number; // 默认 2
+  /** 是否保留原始完整 token (未拆分版) */
+  keepOriginal?: boolean; // 默认 true
+}
+```
+
+#### 3.3 代码感知分词器设计
+
+**分词规则** (按优先级依次执行):
+
+```
+输入: "getHTTPResponse_for_k8s-deployment"
+                    │
+  ┌─────────────────┼──────────────────┐
+  │ Step 1: 按非字母数字分割            │
+  │ → ["getHTTPResponse", "for",       │
+  │    "k8s", "deployment"]             │
+  │ 原始完整 token 也保留:              │
+  │   "k8s-deployment"                  │
+  ├─────────────────┼──────────────────┤
+  │ Step 2: camelCase/PascalCase 拆分  │
+  │ "getHTTPResponse"                   │
+  │ → ["get", "HTTP", "Response"]       │
+  │ 连续大写视为缩写词保留              │
+  ├─────────────────┼──────────────────┤
+  │ Step 3: 大小写保持                  │
+  │ 同时生成 lowercase 变体:            │
+  │   "HTTP" → ["HTTP", "http"]         │
+  │ 原因: 搜索 "http" 能匹配 "HTTP"    │
+  ├─────────────────┼──────────────────┤
+  │ Step 4: 长度过滤                    │
+  │ 移除长度 < minTokenLength 的 token  │
+  └─────────────────┼──────────────────┘
+                    │
+  最终 token 集合 (去重后):
+  ["getHTTPResponse", "for", "k8s", "deployment",
+   "k8s-deployment", "get", "HTTP", "http",
+   "Response", "response"]
+```
+
+#### 3.4 Hash 函数: MurmurHash3
+
+Qdrant sparse vector 的 `indices` 字段要求 `uint32` 类型的整数索引。我们使用 MurmurHash3 将 token 字符串映射到 uint32 空间：
+
+```typescript
+/**
+ * MurmurHash3 (32-bit) — 纯 TypeScript 实现。
+ * 碰撞率: 在 100K 不同 token 下，理论碰撞概率 ≈ 0.0012 (可忽略)。
+ *
+ * 为什么不用 SHA-256:
+ * - SHA-256 输出 256 bit，截断为 uint32 会丢失分布均匀性
+ * - MurmurHash3 专为 hash table 设计，uint32 分布极均匀
+ * - 性能: MurmurHash3 比 SHA-256 快 ~20 倍
+ */
+function murmurhash3_32(key: string, seed: number = 0): number { ... }
+```
+
+#### 3.5 TF 权重计算
+
+```typescript
+encode(text: string): SparseVector {
+  const tokens = this.tokenize(text);
+  const termFreq = new Map<string, number>();
+
+  // 统计词频
+  for (const token of tokens) {
+    termFreq.set(token, (termFreq.get(token) ?? 0) + 1);
+  }
+
+  // TF = freq / totalTokens (归一化)
+  const totalTokens = tokens.length;
+  const indices: number[] = [];
+  const values: number[] = [];
+
+  for (const [token, freq] of termFreq) {
+    indices.push(murmurhash3_32(token));
+    values.push(freq / totalTokens);
+  }
+
+  return { indices, values };
+}
+```
+
+**IDF 处理**：Qdrant 在 `sparse_vectors` 配置中设置 `modifier: "idf"` 后，服务端会自动基于语料库统计计算 IDF 权重并与我们传入的 TF 值相乘。这避免了客户端维护全局 IDF 表的复杂性。
+
+#### 3.6 暗病分析: Sparse 编码的边界问题
+
+| #   | 暗病                                            | 严重性 | 根因                                                 | 对策                                                                                 |
+| --- | ----------------------------------------------- | ------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| S1  | MurmurHash3 碰撞导致不同 token 映射到同一 index | 🟢 低  | uint32 空间足够大（4.3B），100K token 碰撞率 ≈ 0.12% | 可接受，不影响检索质量                                                               |
+| S2  | 空文本或纯符号文本生成空 sparse vector          | 🟡 中  | tokenize 过滤掉所有 token 后 indices=[], values=[]   | 防御: 空 sparse vector 时写入全零占位 `{indices: [0], values: [0.0]}`                |
+| S3  | CJK 字符分词粗糙                                | 🟡 中  | BM25 tokenizer 按空格/标点分词，中文无空格           | 对策: 中文降级为按单字分词（每个汉字作为独立 token），确保中文关键词可被 sparse 匹配 |
+| S4  | 超长文本 token 数爆炸                           | 🟡 中  | 50KB 内容可能产生 10K+ token → sparse vector 过大    | 对策: 设定 `MAX_SPARSE_TOKENS = 2000` 上限，超出后按 TF 排序截断                     |
+
+---
+
+### 四、Qdrant Collection 架构升级
+
+#### 4.1 新 Collection Schema
+
+**当前** (匿名单向量):
+
+```typescript
+await client.createCollection(name, {
+  vectors: { size: 768, distance: "Cosine" },
+});
+```
+
+**升级后** (Named Dense + Named Sparse):
+
+```typescript
+await client.createCollection(name, {
+  vectors: {
+    dense: {
+      size: 1024, // bge-m3 维度
+      distance: "Cosine",
+    },
+  },
+  sparse_vectors: {
+    sparse: {
+      modifier: "idf", // 服务端自动计算 IDF 加权
+    },
+  },
+});
+```
+
+#### 4.2 Upsert 格式变更
+
+**当前**:
+
+```typescript
+await client.upsert(name, {
+  points: [{ id, vector: denseVector, payload }],
+  wait: true,
+});
+```
+
+**升级后**:
+
+```typescript
+await client.upsert(name, {
+  points: [
+    {
+      id,
+      vector: {
+        dense: denseVector, // number[] (1024d)
+        sparse: {
+          // SparseVector
+          indices: sparseIndices, // uint32[]
+          values: sparseValues, // float[]
+        },
+      },
+      payload,
+    },
+  ],
+  wait: true,
+});
+```
+
+#### 4.3 Search 改为 Query API
+
+**当前** (`client.search()`):
+
+```typescript
+const results = await client.search(name, {
+  vector: queryVector,
+  limit: 10,
+  score_threshold: 0.55,
+  with_payload: true,
+  filter,
+});
+```
+
+**升级后** (`client.query()` + Prefetch + RRF):
+
+```typescript
+const result = await client.query(name, {
+  prefetch: [
+    {
+      query: denseQueryVector, // Dense 语义检索
+      using: "dense",
+      limit: 20, // 粗筛 top-20
+    },
+    {
+      query: {
+        // Sparse 关键词匹配
+        indices: sparseQueryIndices,
+        values: sparseQueryValues,
+      },
+      using: "sparse",
+      limit: 20,
+    },
+  ],
+  query: {
+    fusion: "rrf", // RRF 自动融合两路结果
+  },
+  limit: 10,
+  with_payload: true,
+  filter,
+});
+// result.points: ScoredPoint[]
+```
+
+#### 4.4 QdrantService 接口变更
+
+```typescript
+// 新增类型
+export interface QdrantHybridVector {
+  dense: number[];
+  sparse: SparseVector;
+}
+
+export interface QdrantPoint {
+  id: string;
+  vector: number[] | QdrantHybridVector;  // 向后兼容
+  payload: Record<string, unknown>;
+}
+
+// QdrantService 新增方法
+export class QdrantService {
+  // 新增: 混合搜索
+  async hybridSearch(
+    project: string,
+    denseVector: number[],
+    sparseVector: SparseVector,
+    options?: { limit?: number; scoreThreshold?: number; filter?: Record<string, unknown> }
+  ): Promise<QdrantSearchResult[]>;
+
+  // 保留旧方法用于向后兼容（仅 Dense 检索，过渡期使用）
+  async search(...): Promise<QdrantSearchResult[]>;
+}
+```
+
+#### 4.5 Collection 迁移策略
+
+🔴 **破坏性变更**：匿名 768d vector → Named 1024d + Sparse 不能原地升级。
+
+**迁移方案（方案 B: 全量重建）**：
+
+用户已确认：现有测试数据可直接删除重建。
+
+```
+Step 1: 删除旧 collection (em_<project>)
+Step 2: 使用新 schema 创建 collection
+Step 3: (可选) 如有重要历史记忆，重新 save 写入
+```
+
+**ensureCollection 自动检测**:
+
+```typescript
+async ensureCollection(project: string): Promise<string> {
+  const name = collectionName(project);
+
+  if (this.initializedCollections.has(name)) return name;
+
+  const exists = await this.client.collectionExists(name);
+  if (exists.exists) {
+    // 🆕 检测 collection 是否为新 schema (named vectors)
+    const info = await this.client.getCollection(name);
+    const isLegacy = !info.config?.params?.vectors?.dense;
+
+    if (isLegacy) {
+      log.warn(`Collection ${name} uses legacy schema (anonymous vector). ` +
+        `Delete and recreate to enable hybrid search.`);
+      // 不自动删除 — 由用户手动操作或环境变量控制
+      // FORCE_COLLECTION_RECREATE=true 时自动重建
+    }
+  } else {
+    // 创建新 schema 的 collection
+    await this.client.createCollection(name, {
+      vectors: {
+        dense: { size: this.embeddingDimension, distance: "Cosine" },
+      },
+      sparse_vectors: {
+        sparse: { modifier: "idf" },
+      },
+    });
+  }
+
+  this.initializedCollections.add(name);
+  return name;
+}
+```
+
+---
+
+### 五、Save 管道升级
+
+#### 5.1 管道变更对比
+
+**当前管道**:
+
+```
+Input → safeParse → InjectionCheck → LengthCheck → sanitize → hash → dedup → embed(dense) → upsert
+```
+
+**升级后管道**:
+
+```
+Input → safeParse → InjectionCheck → LengthCheck → sanitize → hash → dedup
+      → embed(dense, bge-m3)       ─┐
+      → sparseEncode(BM25)          ─┤
+                                     ▼
+                                   upsert(dense + sparse)
+```
+
+**关键设计决策**: Dense embedding 和 Sparse encoding 可以**并行执行**（无数据依赖），降低总延迟：
+
+```typescript
+// 并行计算 Dense + Sparse
+const [embeddingResult, sparseResult] = await Promise.all([
+  deps.embedding.embedWithMeta(sanitizedContent),
+  Promise.resolve(deps.sparseEncoder.encode(sanitizedContent)),
+]);
+```
+
+#### 5.2 SaveHandlerDeps 变更
+
+```typescript
+export interface SaveHandlerDeps {
+  qdrant: QdrantService;
+  embedding: EmbeddingService;
+  sparseEncoder: SparseEncoder; // 🆕
+  defaultProject: string;
+  embeddingModel?: string;
+}
+```
+
+---
+
+### 六、Search 管道升级
+
+#### 6.1 管道变更对比
+
+**当前管道**:
+
+```
+Query → embed(dense) → qdrant.search(dense) → format
+```
+
+**升级后管道**:
+
+```
+Query → embed(dense) + sparseEncode(query)
+      → qdrant.hybridSearch(dense + sparse, RRF)
+      → [可选] reranker.rerank(query, results)
+      → format (boundary markers)
+```
+
+#### 6.2 SearchHandlerDeps 变更
+
+```typescript
+export interface SearchHandlerDeps {
+  qdrant: QdrantService;
+  embedding: EmbeddingService;
+  sparseEncoder: SparseEncoder; // 🆕
+  reranker?: RerankerService; // 🆕 可选
+  defaultProject: string;
+}
+```
+
+---
+
+### 七、Gemini 维度对齐
+
+#### 7.1 问题
+
+当前 Gemini Provider 输出 768d MRL（Matryoshka Representation Learning）。如果 Ollama bge-m3 输出 1024d，auto 模式下 Gemini(768d) → Ollama(1024d) 降级时向量维度不匹配，同一 Collection 无法混存。
+
+#### 7.2 解决方案
+
+Gemini `embedding-001` 支持 `outputDimensionality` 参数（MRL 支持任意维度截断）。将 Gemini 输出调整为 1024d：
+
+```typescript
+// container.ts 改造
+const geminiProvider = new GeminiEmbeddingProvider({
+  apiKey: config.geminiApiKey,
+  model: config.geminiModel,
+  outputDimensionality: 1024, // ← 与 bge-m3 对齐
+});
+```
+
+**环境变量**:
+| 变量 | 旧值 | 新值 | 说明 |
+|------|------|------|------|
+| `GEMINI_OUTPUT_DIM` | — (硬编码 768) | `1024` | Gemini MRL 输出维度 |
+
+#### 7.3 暗病分析: Gemini MRL 1024d 质量
+
+🟡 **潜在问题**: Gemini embedding-001 的 MRL 最优维度可能在 768d。截断到 1024d 理论上不会降低质量（MRL 维度越高信息越完整），但 1024d 并非 Gemini 默认输出维度，可能存在未经充分优化的长尾 case。
+
+**缓解**: Gemini 在 auto 模式下仍是主 Provider，bge-m3 作为降级。实际生产中 Gemini 1024d 的质量大概率优于 bge-m3 1024d（远端大模型 vs 本地小模型），这是一个安全的选择。
+
+---
+
+### 八、Reranker Python Sidecar
+
+#### 8.1 架构设计
+
+```
+┌──────────────────────┐        ┌──────────────────────────┐
+│  Easy Memory Server  │  HTTP  │  Reranker Sidecar        │
+│  (Node.js)           │───────→│  (Python FastAPI)        │
+│                      │  :8787 │                          │
+│  src/services/       │        │  - FlagReranker           │
+│    reranker.ts       │        │  - bge-reranker-v2-m3    │
+│                      │        │  - GPU/CPU auto          │
+└──────────────────────┘        └──────────────────────────┘
+       Docker Network: easy-memory-net (内部通信)
+```
+
+#### 8.2 Reranker 服务接口
+
+**新增文件: `src/services/reranker.ts`**
+
+```typescript
+export interface RerankerConfig {
+  baseUrl: string; // 默认: http://localhost:8787
+  timeoutMs?: number; // 默认: 15000 (cross-encoder 较慢)
+  maxRetries?: number; // 默认: 2
+  enabled: boolean; // 默认: false (可选组件)
+}
+
+export interface RerankerResult {
+  index: number;
+  score: number;
+}
+
+export interface RerankerService {
+  rerank(query: string, passages: string[]): Promise<RerankerResult[]>;
+  healthCheck(): Promise<boolean>;
+  close(): void;
+}
+```
+
+#### 8.3 Python Sidecar 实现
+
+```python
+# reranker-sidecar/main.py
+from fastapi import FastAPI
+from FlagEmbedding import FlagReranker
+
+app = FastAPI()
+reranker = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=True)
+
+@app.post("/rerank")
+async def rerank(request: RerankerRequest):
+    pairs = [[request.query, p] for p in request.passages]
+    scores = reranker.compute_score(pairs, normalize=True)
+    return {"results": [
+        {"index": i, "score": s}
+        for i, s in sorted(enumerate(scores), key=lambda x: -x[1])
+    ]}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+```
+
+#### 8.4 Dockerfile
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+RUN pip install fastapi uvicorn FlagEmbedding
+COPY main.py .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8787"]
+```
+
+#### 8.5 Search 管道集成
+
+Reranker 是**可选增强组件**，不启用时搜索管道完全不受影响：
+
+```typescript
+// search.ts 中的 reranker 集成
+if (deps.reranker) {
+  const passages = results.map((r) => String(r.payload.content ?? ""));
+  try {
+    const reranked = await deps.reranker.rerank(input.query, passages);
+    // 按 reranker score 重排结果
+    results = reranked.map((r) => results[r.index]!);
+  } catch (err) {
+    // Reranker 失败不阻塞搜索 — 降级返回 RRF 结果
+    log.warn("Reranker failed, falling back to RRF results", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+```
+
+#### 8.6 环境变量
+
+| 变量                  | 默认值                  | 说明                  |
+| --------------------- | ----------------------- | --------------------- |
+| `RERANKER_ENABLED`    | `false`                 | 是否启用 Reranker     |
+| `RERANKER_URL`        | `http://localhost:8787` | Reranker sidecar 地址 |
+| `RERANKER_TIMEOUT_MS` | `15000`                 | Reranker 超时         |
+
+---
+
+### 九、Token 保留策略 (代码标识符)
+
+#### 9.1 问题
+
+代码中的变量名如 `user_profile_id`、`getHTTPResponse`、`k8s-deployment` 需要精确匹配。传统 NLP 预处理（lowercase、去标点、stemming）会破坏这些信息。
+
+#### 9.2 策略
+
+| 处理步骤  | Dense 向量 (bge-m3)       | Sparse 向量 (BM25)                       |
+| --------- | ------------------------- | ---------------------------------------- |
+| 下划线    | bge-m3 tokenizer 自行处理 | ✅ 保留并作为分割符 + 保留原始完整 token |
+| 连字符    | bge-m3 tokenizer 自行处理 | ✅ 保留并作为分割符 + 保留原始完整 token |
+| 大小写    | bge-m3 tokenizer 自行处理 | ✅ 保留原始 + 生成 lowercase 变体        |
+| camelCase | bge-m3 tokenizer 自行处理 | ✅ 拆分为子词 + 保留原始完整 token       |
+
+**设计理念**: Dense 向量负责语义匹配（"用户配置文件 ID" ≈ "user profile identifier"），Sparse 向量负责精确 token 匹配（`user_profile_id` = `user_profile_id`）。两者通过 RRF 互补。
+
+---
+
+### 十、DI 容器 (container.ts) 变更
+
+#### 10.1 AppConfig 新增字段
+
+```typescript
+export interface AppConfig {
+  // ... 保留现有字段 ...
+
+  // Embedding (升级)
+  embeddingDimension: number; // 🆕 默认 1024
+  geminiOutputDim: number; // 🆕 默认 1024
+
+  // Reranker (新增)
+  rerankerEnabled: boolean; // 🆕 默认 false
+  rerankerUrl: string; // 🆕 默认 http://localhost:8787
+  rerankerTimeoutMs: number; // 🆕 默认 15000
+}
+```
+
+#### 10.2 AppContainer 新增服务
+
+```typescript
+export interface AppContainer {
+  readonly config: AppConfig;
+  readonly qdrant: QdrantService;
+  readonly embedding: EmbeddingService;
+  readonly sparseEncoder: SparseEncoder; // 🆕
+  readonly reranker: RerankerService | null; // 🆕 可选
+  readonly rateLimiter: RateLimiter;
+}
+```
+
+#### 10.3 实例化顺序
+
+```
+① RateLimiter       — 无外部依赖
+② SparseEncoder     — 无外部依赖（纯计算）
+③ OllamaProvider    — dimension = config.embeddingDimension
+④ GeminiProvider    — outputDimensionality = config.geminiOutputDim
+⑤ EmbeddingService  — providers + rateLimiter
+⑥ QdrantService     — embeddingDimension = config.embeddingDimension
+⑦ RerankerService   — config.rerankerEnabled ? new HttpReranker(...) : null
+```
+
+---
+
+### 十一、影响文件清单
+
+| 文件                                  | 变更类型 | 说明                                                          |
+| ------------------------------------- | -------- | ------------------------------------------------------------- |
+| `src/services/sparse-encoder.ts`      | **新建** | BM25 稀疏编码器 + 代码感知 tokenizer + MurmurHash3            |
+| `src/services/reranker.ts`            | **新建** | Reranker 客户端 (HTTP → Python sidecar)                       |
+| `src/services/embedding-providers.ts` | 修改     | OllamaProvider dimension 可配置 + MODEL_DIMENSIONS 映射表     |
+| `src/services/qdrant.ts`              | **重构** | Named vectors schema + hybridSearch (query API) + upsert 格式 |
+| `src/container.ts`                    | 修改     | 新增 SparseEncoder/Reranker 装配 + 新环境变量                 |
+| `src/tools/save.ts`                   | 修改     | 并行 Dense+Sparse 生成 + upsert 格式                          |
+| `src/tools/search.ts`                 | 修改     | hybridSearch + 可选 reranker                                  |
+| `src/tools/status.ts`                 | 修改     | 输出新增 sparse_encoder 和 reranker 状态                      |
+| `src/types/schema.ts`                 | 修改     | StatusOutput 新增字段                                         |
+| `reranker-sidecar/`                   | **新建** | Python FastAPI + Dockerfile                                   |
+| `docker-compose.yml`                  | 修改     | 新增 reranker service                                         |
+
+---
+
+### 十二、对抗性交叉审查记录
+
+#### 审查 HYB-1: 分布式系统 Agent — Collection 迁移期间的并发安全
+
+**质疑**: `ensureCollection` 检测到 legacy schema 后，如果 `FORCE_COLLECTION_RECREATE=true`，删除旧 collection 和创建新 collection 之间可能有并发请求写入。
+
+**修补**: 引入 collection-level 互斥锁（与现有 `projectLocks` 同一模式）。删除+创建操作在锁内原子执行：
+
+```typescript
+return withProjectLock(project, async () => {
+  await this.client.deleteCollection(name);
+  await this.client.createCollection(name, newSchema);
+});
+```
+
+#### 审查 HYB-2: 性能 Agent — 双向量生成的延迟开销
+
+**质疑**: Save 管道现在需要 Dense embedding (~200ms) + Sparse encoding (~1ms) + Qdrant upsert (**增大**因为写入两个向量)。总延迟是否可控？
+
+**分析**:
+
+- Dense embedding: ~150-300ms (bge-m3 比 nomic-embed-text 慢)
+- Sparse encoding: <5ms (纯 CPU hash 计算)
+- Qdrant upsert: 增加 ~10% (多写入一个 sparse vector)
+- **总 Save 延迟**: ~200-350ms (当前 ~80-120ms)
+- **可接受**：MCP save 操作非交互式，用户不会感知到这个延迟
+
+**额外优化**: Dense 和 Sparse 并行计算（Promise.all），Sparse <5ms 基本不影响总延迟
+
+#### 审查 HYB-3: 兼容性 Agent — 旧数据向量模型标记
+
+**质疑**: 新旧 collection 切换后，payload 中的 `embedding_model` 字段从 "nomic-embed-text" 变为 "bge-m3"。如果未来回滚模型，如何识别不同模型生成的向量？
+
+**修补**: 已有 `embedding_model` payload 字段（§11b Layer 1）。新增建议：
+
+- payload 中增加 `embedding_dim: number` 字段（当前缺失）
+- schema_version 从 `1` 升级到 `2`（标记 hybrid schema）
+
+#### 审查 HYB-4: 安全 Agent — Reranker Sidecar 攻击面
+
+**质疑**: Reranker sidecar 暴露 HTTP 8787 端口，如果 Docker 网络配置不当，可被外部访问。
+
+**修补**:
+
+- Reranker service 仅绑定 Docker internal network（不映射宿主端口）
+- docker-compose.yml 中 reranker 不设置 `ports` 映射
+- easy-memory 通过 Docker service name（`reranker:8787`）内部通信
+
+#### 审查 HYB-5: 代码架构 Agent — SparseEncoder 的 Singleton 生命周期
+
+**质疑**: SparseEncoder 是无状态纯函数服务，是否需要 close() / 生命周期管理？
+
+**结论**: 不需要。SparseEncoder 无网络连接、无定时器、无流。它是纯计算服务，在 container 中以 Singleton 持有即可，不需要 graceful shutdown 处理。GC 自动回收。
+
+#### 审查 HYB-6: 性能 Agent — Qdrant IDF modifier 冷启动问题
+
+**质疑**: 新 collection 初始阶段只有少量文档，Qdrant 的 `modifier: "idf"` 统计不准确（IDF 需要足够的语料库规模）。
+
+**分析**:
+
+- Qdrant 的 IDF modifier 基于 collection 中所有 point 的 sparse vector 自动统计
+- 初始阶段（<100 条记忆），IDF 偏差大，但此时 Dense 搜索主导（RRF 中 Dense 权重更高）
+- 随着记忆积累，IDF 自动修正
+- **无需特殊处理**，RRF 的自适应融合天然解决此问题
+
+#### 审查 HYB-7: 分布式系统 Agent — search() 方法兼容性
+
+**质疑**: 升级后 `client.query()` 替代 `client.search()`。但如果 collection 仍然是旧 schema（匿名向量），`query()` 中 `using: "dense"` 会报错。
+
+**修补**: `hybridSearch()` 方法前置检查 collection schema：
+
+```typescript
+// 如果 collection 没有 named vectors，降级到 client.search()
+const info = await this.client.getCollection(name);
+const hasNamedVectors = info.config?.params?.vectors?.dense;
+if (!hasNamedVectors) {
+  return this.legacySearch(name, denseVector, options);
+}
+```
+
+#### 审查 HYB-8: 兼容性 Agent — QdrantPoint interface 破坏性变更
+
+**质疑**: `QdrantPoint.vector` 从 `number[]` 变为 `number[] | QdrantHybridVector`，会破坏现有 save.ts 的调用代码。
+
+**修补**:
+
+1. QdrantService 内部处理向量格式转换，对外保持 `upsert(project, points)` 接口
+2. `QdrantPoint.vector` 使用 union type，内部根据 collection schema 自动适配
+3. 或者新增 `upsertHybrid()` 方法，逐步迁移后废弃旧 `upsert()`
+
+**选择方案 2**（新增 `upsertHybrid`）— 避免破坏性接口变更，过渡期并存。
+
+#### 审查 HYB-9: CJK Agent — 中文 BM25 分词退化
+
+**质疑**: BM25 tokenizer 按空格/标点分词，中文句子无空格分隔，整句成为一个巨型 token。
+
+**修补**: 添加 CJK 字符检测，中文字符按单字切分：
+
+```typescript
+// CJK Unified Ideographs 范围
+const CJK_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf]/g;
+
+function tokenizeCJK(text: string): string[] {
+  return [...text.matchAll(CJK_REGEX)].map((m) => m[0]);
+}
+```
+
+这确保搜索"配置"时，sparse 向量包含 `[配, 置]` 两个独立 token，可匹配含有"配置"的记忆。
+
+#### 审查 HYB-10: 总控 Agent — 回滚策略缺失
+
+**质疑**: 如果 bge-m3 上线后发现检索质量反而下降（可能性低但非零），如何回滚？
+
+**修补**:
+
+1. 保留 `MODEL_DIMENSIONS` 映射表，改回 `OLLAMA_MODEL=nomic-embed-text` 即可
+2. Collection 需要重建（维度不匹配）
+3. **建议**: 升级前通过 Qdrant snapshot 备份现有 collection
+4. 环境变量控制，零代码回滚
+
+---
+
+### 十三、实施阶段与验收标准
+
+| 阶段        | 内容                                                | 验收标准                                                  | 预估工作量 |
+| ----------- | --------------------------------------------------- | --------------------------------------------------------- | ---------- |
+| **Stage A** | bge-m3 模型切换 + OllamaProvider dimension 可配置   | `ollama pull bge-m3` 成功 + 单元测试通过 + Dense 搜索可用 | 0.5 天     |
+| **Stage B** | SparseEncoder + Qdrant hybrid schema + hybridSearch | 代码标识符精确匹配测试通过 + RRF 融合搜索可用             | 1-2 天     |
+| **Stage D** | 全量测试 + Gemini 维度对齐 + auto 模式修正          | auto 模式降级时向量维度一致 + E2E 全通                    | 0.5 天     |
+| **Stage C** | Reranker sidecar + 集成                             | Docker Compose 一键启动 + Reranker E2E 测试通过           | 1 天       |
+
+**总计**: 3-4 天（不含测试补充）
+
+**实施顺序**: A → B → D → C（先保证 Dense+Sparse 可用，全量测试确认后，Reranker 作为可选增强项最后实施）
+
+与原白皮书路线图的关系：
+
+- 本 ADR 将白皮书 §四（5 层检索管道）中的 **Layer 2: 混合检索** 和 **Layer 4: Re-ranking** 提前到当前实施
+- 原 Phase 2 路线表中"混合检索: Dense + Sparse + RRF"正式落地
+- Re-ranking 原定为 Phase 4，现提前为 Phase 2 可选组件
+
+---
+
+### 十四、对原白皮书的修正记录
+
+| 原文位置               | 原内容                                        | 修正                                     | 原因                   |
+| ---------------------- | --------------------------------------------- | ---------------------------------------- | ---------------------- |
+| §二 Embedding 模型     | 默认: Ollama `nomic-embed-text` (768d)        | 默认: Ollama `bge-m3` (1024d)            | 中文语义质量不足       |
+| §二 Embedding 模型     | 可选: OpenAI `text-embedding-3-small` (1536d) | 可选: Gemini `embedding-001` (1024d MRL) | 对齐维度               |
+| §四 Layer 2 混合检索   | "Phase 2 实施"                                | 提前到 Phase 1.5 实施                    | 核心检索能力不应推迟   |
+| §四 Layer 4 Re-ranking | "Phase 4 打磨"                                | Phase 2 可选组件                         | 有现成模型+Docker 方案 |
+| 补充十九 Phase 1       | 基础检索: 纯 Dense                            | 基础检索: Dense + Sparse + RRF           | 混合检索提前           |
+| 竞品对比表             | Easy Memory: Dense+Sparse+RRF ✅              | 与事实一致 (之前是规划，现在落实)        | 兑现白皮书承诺         |
+
+---
+
+### 十五、全链路闭环验证
+
+| 测试场景               | 输入                                                                   | 预期行为                         | 覆盖的组件             |
+| ---------------------- | ---------------------------------------------------------------------- | -------------------------------- | ---------------------- |
+| 中文语义搜索           | save: "Vue3 组合式 API 的 ref 和 reactive 区别" → search: "响应式数据" | 召回记忆，score > 0.6            | bge-m3 Dense           |
+| 代码标识符精确匹配     | save: "user_profile_id 是用户表主键" → search: "user_profile_id"       | 召回记忆，Sparse 贡献显著        | BM25 Sparse + RRF      |
+| camelCase 匹配         | save: "getHTTPResponse 处理网络请求" → search: "HTTP Response"         | 召回记忆                         | BM25 tokenizer         |
+| 中英混合               | save: "使用 k8s-deployment 部署微服务" → search: "k8s deployment"      | 召回记忆                         | CJK 分词 + 连字符保留  |
+| Reranker 精排          | search 返回 10 条 → reranker 重排                                      | 相关性最高的记忆排在前面         | Reranker sidecar       |
+| Reranker 降级          | reranker sidecar 宕机                                                  | 搜索正常返回 RRF 结果，日志警告  | 降级容错               |
+| auto 模式降级          | Gemini 熔断 → Ollama bge-m3                                            | 向量维度一致 (1024d)，无报错     | Gemini+Ollama 维度对齐 |
+| Legacy collection 检测 | 旧 768d 匿名向量 collection                                            | 日志警告，降级到 Dense-only 搜索 | 向后兼容               |
+
+---
+
+_本 ADR 由第九轮 Hybrid Search Architecture Review 生成。核心变更：nomic-embed-text→bge-m3 模型升级 + TypeScript BM25 稀疏编码器 + Qdrant Named Vectors + Prefetch/RRF 混合搜索 + 可选 Reranker Python Sidecar。共 10 条对抗性审查质疑 (HYB-1 至 HYB-10)，均已提出缓解方案。_

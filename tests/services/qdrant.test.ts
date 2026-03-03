@@ -11,6 +11,7 @@ const mockClient = {
   createCollection: vi.fn(),
   upsert: vi.fn(),
   search: vi.fn(),
+  query: vi.fn(),
   setPayload: vi.fn(),
   getCollection: vi.fn(),
   getCollections: vi.fn(),
@@ -32,7 +33,7 @@ describe("QdrantService", () => {
   const config = {
     url: "http://localhost:6333",
     apiKey: "test-key",
-    embeddingDimension: 768,
+    embeddingDimension: 1024,
   };
 
   beforeEach(() => {
@@ -63,7 +64,12 @@ describe("QdrantService", () => {
       expect(mockClient.createCollection).toHaveBeenCalledWith(
         "em_my-project",
         {
-          vectors: { size: 768, distance: "Cosine" },
+          vectors: {
+            dense: { size: 1024, distance: "Cosine" },
+          },
+          sparse_vectors: {
+            bm25: {},
+          },
         },
       );
     });
@@ -120,17 +126,75 @@ describe("QdrantService", () => {
         "insufficient storage",
       );
     });
+
+    // [FIX C-2] 旧 Collection 迁移检测
+    it("should reject collection with legacy unnamed vectors", async () => {
+      mockClient.collectionExists.mockResolvedValueOnce({ exists: true });
+      mockClient.getCollection.mockResolvedValueOnce({
+        config: {
+          params: {
+            vectors: { size: 768, distance: "Cosine" },
+          },
+        },
+      });
+
+      const service = new QdrantService(config);
+      await expect(service.ensureCollection("legacy")).rejects.toThrow(
+        /legacy unnamed vectors.*768d.*Migration required/,
+      );
+    });
+
+    it("should reject collection with dimension mismatch on named 'dense' vector", async () => {
+      mockClient.collectionExists.mockResolvedValueOnce({ exists: true });
+      mockClient.getCollection.mockResolvedValueOnce({
+        config: {
+          params: {
+            vectors: { dense: { size: 768, distance: "Cosine" } },
+          },
+        },
+      });
+
+      const service = new QdrantService(config);
+      await expect(service.ensureCollection("old-model")).rejects.toThrow(
+        /dimension mismatch.*existing=768.*expected=1024/,
+      );
+    });
+
+    it("should accept collection with matching named 'dense' vector config", async () => {
+      mockClient.collectionExists.mockResolvedValueOnce({ exists: true });
+      mockClient.getCollection.mockResolvedValueOnce({
+        config: {
+          params: {
+            vectors: { dense: { size: 1024, distance: "Cosine" } },
+          },
+        },
+      });
+
+      const service = new QdrantService(config);
+      const name = await service.ensureCollection("compatible");
+      expect(name).toBe("em_compatible");
+    });
+
+    it("should proceed cautiously when getCollection fails during validation", async () => {
+      mockClient.collectionExists.mockResolvedValueOnce({ exists: true });
+      mockClient.getCollection.mockRejectedValueOnce(new Error("timeout"));
+
+      const service = new QdrantService(config);
+      // Should NOT throw — network issues during validation are non-fatal
+      const name = await service.ensureCollection("flaky");
+      expect(name).toBe("em_flaky");
+    });
   });
 
   describe("upsert", () => {
-    it("should call client.upsert with wait:true (iron rule)", async () => {
+    it("should call client.upsert with named vectors and wait:true (iron rule)", async () => {
       mockClient.upsert.mockResolvedValueOnce(undefined);
 
       const service = new QdrantService(config);
       const points = [
         {
           id: "uuid-1",
-          vector: new Array(768).fill(0.1),
+          vector: new Array(1024).fill(0.1),
           payload: { content: "test" },
         },
       ];
@@ -141,11 +205,34 @@ describe("QdrantService", () => {
         points: [
           {
             id: "uuid-1",
-            vector: expect.any(Array),
+            vector: { dense: expect.any(Array) },
             payload: { content: "test" },
           },
         ],
         wait: true, // ⚠️ 必须为 true
+      });
+    });
+
+    it("should include bm25 sparse vector when provided", async () => {
+      mockClient.upsert.mockResolvedValueOnce(undefined);
+
+      const service = new QdrantService(config);
+      const points = [
+        {
+          id: "uuid-2",
+          vector: new Array(1024).fill(0.2),
+          sparseVector: { indices: [1, 5, 10], values: [0.8, 0.6, 0.4] },
+          payload: { content: "sparse test" },
+        },
+      ];
+
+      await service.upsert("my-project", points);
+
+      const upsertCall = mockClient.upsert.mock.calls[0];
+      const point = upsertCall[1].points[0];
+      expect(point.vector).toEqual({
+        dense: expect.any(Array),
+        bm25: { indices: [1, 5, 10], values: [0.8, 0.6, 0.4] },
       });
     });
 
@@ -163,33 +250,35 @@ describe("QdrantService", () => {
     });
   });
 
-  describe("search", () => {
-    it("should search with default parameters", async () => {
-      mockClient.search.mockResolvedValueOnce([
-        { id: "uuid-1", score: 0.9, payload: { content: "found" } },
-      ]);
+  describe("search (pure dense via query API)", () => {
+    it("should search with default parameters using query API", async () => {
+      mockClient.query.mockResolvedValueOnce({
+        points: [{ id: "uuid-1", score: 0.9, payload: { content: "found" } }],
+      });
 
       const service = new QdrantService(config);
       const results = await service.search(
         "my-project",
-        new Array(768).fill(0),
+        new Array(1024).fill(0),
       );
 
       expect(results).toHaveLength(1);
       expect(results[0]!.id).toBe("uuid-1");
       expect(results[0]!.score).toBe(0.9);
-      expect(mockClient.search).toHaveBeenCalledWith(
+      expect(mockClient.query).toHaveBeenCalledWith(
         "em_my-project",
         expect.objectContaining({
+          query: expect.any(Array),
+          using: "dense",
           limit: 5,
-          score_threshold: 0.65,
+          score_threshold: 0.55,
           with_payload: true,
         }),
       );
     });
 
     it("should apply custom limit and threshold", async () => {
-      mockClient.search.mockResolvedValueOnce([]);
+      mockClient.query.mockResolvedValueOnce({ points: [] });
 
       const service = new QdrantService(config);
       await service.search("my-project", [], {
@@ -197,10 +286,167 @@ describe("QdrantService", () => {
         scoreThreshold: 0.8,
       });
 
-      expect(mockClient.search).toHaveBeenCalledWith(
+      expect(mockClient.query).toHaveBeenCalledWith(
         "em_my-project",
-        expect.objectContaining({ limit: 10, score_threshold: 0.8 }),
+        expect.objectContaining({
+          limit: 10,
+          score_threshold: 0.8,
+          using: "dense",
+        }),
       );
+    });
+
+    it("should handle empty points array gracefully", async () => {
+      mockClient.query.mockResolvedValueOnce({ points: [] });
+
+      const service = new QdrantService(config);
+      const results = await service.search("my-project", []);
+
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("hybridSearch (Dense + Sparse + RRF)", () => {
+    it("should use prefetch + RRF fusion with both vectors", async () => {
+      mockClient.query.mockResolvedValueOnce({
+        points: [
+          { id: "uuid-1", score: 0.85, payload: { content: "hybrid result" } },
+        ],
+      });
+
+      const service = new QdrantService(config);
+      const denseVec = new Array(1024).fill(0.1);
+      const sparseVec = { indices: [100, 200, 300], values: [1.5, 0.8, 0.3] };
+
+      const results = await service.hybridSearch(
+        "my-project",
+        denseVec,
+        sparseVec,
+        { limit: 5 },
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.score).toBe(0.85);
+
+      const queryCall = mockClient.query.mock.calls[0];
+      const params = queryCall[1];
+      expect(params.query).toEqual({ fusion: "rrf" });
+      expect(params.prefetch).toHaveLength(2);
+      expect(params.prefetch[0].using).toBe("dense");
+      expect(params.prefetch[1].using).toBe("bm25");
+      expect(params.prefetch[1].query).toEqual({
+        indices: [100, 200, 300],
+        values: [1.5, 0.8, 0.3],
+      });
+      expect(params.limit).toBe(5);
+      expect(params.with_payload).toBe(true);
+    });
+
+    it("should fallback to pure dense when sparseVector is undefined", async () => {
+      mockClient.query.mockResolvedValueOnce({
+        points: [
+          { id: "uuid-2", score: 0.7, payload: { content: "dense only" } },
+        ],
+      });
+
+      const service = new QdrantService(config);
+      const results = await service.hybridSearch(
+        "my-project",
+        new Array(1024).fill(0),
+        undefined,
+        { limit: 3 },
+      );
+
+      expect(results).toHaveLength(1);
+      // Should have called query with using: "dense" (pure dense fallback)
+      const params = mockClient.query.mock.calls[0][1];
+      expect(params.using).toBe("dense");
+      expect(params.prefetch).toBeUndefined();
+    });
+
+    it("should fallback to pure dense when sparseVector has empty indices", async () => {
+      mockClient.query.mockResolvedValueOnce({ points: [] });
+
+      const service = new QdrantService(config);
+      await service.hybridSearch("my-project", [0.1], {
+        indices: [],
+        values: [],
+      });
+
+      const params = mockClient.query.mock.calls[0][1];
+      expect(params.using).toBe("dense");
+    });
+
+    it("should use prefetchLimit = max(limit * 3, 20)", async () => {
+      mockClient.query.mockResolvedValueOnce({ points: [] });
+
+      const service = new QdrantService(config);
+      await service.hybridSearch(
+        "my-project",
+        [0.1],
+        { indices: [1], values: [1.0] },
+        { limit: 3 },
+      );
+
+      const params = mockClient.query.mock.calls[0][1];
+      // max(3 * 3, 20) = 20
+      expect(params.prefetch[0].limit).toBe(20);
+      expect(params.prefetch[1].limit).toBe(20);
+    });
+
+    it("should pass filter to hybrid query (both prefetch and top-level)", async () => {
+      mockClient.query.mockResolvedValueOnce({ points: [] });
+
+      const service = new QdrantService(config);
+      const myFilter = {
+        must: [{ key: "lifecycle", match: { value: "active" } }],
+      };
+      await service.hybridSearch(
+        "my-project",
+        [0.1],
+        { indices: [1], values: [1.0] },
+        { limit: 5, filter: myFilter },
+      );
+
+      const params = mockClient.query.mock.calls[0][1];
+      // [FIX H-6] filter 应注入到每个 prefetch 子查询
+      expect(params.prefetch[0].filter).toEqual(myFilter);
+      expect(params.prefetch[1].filter).toEqual(myFilter);
+      // 顶层 filter 也保留
+      expect(params.filter).toEqual(myFilter);
+    });
+
+    it("should pass scoreThreshold to dense prefetch only (not sparse)", async () => {
+      mockClient.query.mockResolvedValueOnce({ points: [] });
+
+      const service = new QdrantService(config);
+      await service.hybridSearch(
+        "my-project",
+        [0.1],
+        { indices: [1], values: [1.0] },
+        { limit: 5, scoreThreshold: 0.55 },
+      );
+
+      const params = mockClient.query.mock.calls[0][1];
+      // [FIX C-1] scoreThreshold 应加在 dense prefetch 上
+      expect(params.prefetch[0].score_threshold).toBe(0.55);
+      // BM25 sparse 不应有 score_threshold（分数语义不同）
+      expect(params.prefetch[1].score_threshold).toBeUndefined();
+    });
+
+    it("should not add score_threshold to dense prefetch when scoreThreshold is undefined", async () => {
+      mockClient.query.mockResolvedValueOnce({ points: [] });
+
+      const service = new QdrantService(config);
+      await service.hybridSearch(
+        "my-project",
+        [0.1],
+        { indices: [1], values: [1.0] },
+        { limit: 5 },
+      );
+
+      const params = mockClient.query.mock.calls[0][1];
+      expect(params.prefetch[0].score_threshold).toBeUndefined();
     });
   });
 

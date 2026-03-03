@@ -139,11 +139,15 @@ export function setupGracefulShutdown(
     void initiateShutdown("SIGINT");
   };
 
-  // MCP 模式: stdin 监听 + resume（防止进程因 stdin 关闭而提前退出）
-  // HTTP 模式: 跳过 stdin 监听（HTTP 不依赖 stdin，resume 会阻止进程自然退出）
+  // MCP 模式: 监听 stdin close/end 事件检测客户端断连。
+  // ⚠️ 不调用 process.stdin.resume() — stdin 流控由 Transport 层独占管理:
+  //   SDK 的 StdioServerTransport.start() 注册 data listener 时，
+  //   Node.js 自动将 stdin 从 paused 转为 flowing 模式。
+  //   Shutdown 层不应触碰流控，否则在 connect() 之前调用时
+  //   会导致 initialize 消息在 data listener 注册前被丢弃。
+  // close 事件在 fd 关闭时无条件触发，无需 resume()。
+  // HTTP 模式: 跳过 stdin 监听（HTTP 不依赖 stdin）
   if (mode === "mcp") {
-    // D2-3: 保持 stdin 流打开
-    process.stdin.resume();
     process.stdin.on("close", onStdinClose);
     process.stdin.on("end", onStdinEnd);
   }

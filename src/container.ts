@@ -20,6 +20,7 @@ import {
   GeminiEmbeddingProvider,
 } from "./services/embedding.js";
 import type { EmbeddingProvider } from "./services/embedding.js";
+import { BM25Encoder } from "./services/bm25.js";
 import { RateLimiter } from "./utils/rate-limiter.js";
 import { log } from "./utils/logger.js";
 
@@ -74,6 +75,8 @@ export interface AppContainer {
   readonly qdrant: QdrantService;
   readonly embedding: EmbeddingService;
   readonly rateLimiter: RateLimiter;
+  /** [ADR 补充二十] BM25 稀疏向量编码器，用于混合检索 */
+  readonly bm25: BM25Encoder;
 }
 
 // =========================================================================
@@ -129,7 +132,7 @@ export function parseAppConfig(
 
     embeddingProvider: embeddingProvider as EmbeddingProviderMode,
     ollamaBaseUrl: env.OLLAMA_BASE_URL ?? "http://localhost:11434",
-    ollamaModel: env.OLLAMA_MODEL ?? "nomic-embed-text",
+    ollamaModel: env.OLLAMA_MODEL ?? "bge-m3",
     geminiApiKey,
     geminiModel: env.GEMINI_MODEL ?? "gemini-embedding-001",
 
@@ -239,10 +242,14 @@ export function createContainer(config: AppConfig): AppContainer {
     apiKey: config.qdrantApiKey,
   });
 
+  // ⑥ BM25Encoder [ADR 补充二十] — 纯内存计算，无外部 IO
+  const bm25 = new BM25Encoder();
+
   return {
     config,
     qdrant,
     embedding,
     rateLimiter,
+    bm25,
   };
 }

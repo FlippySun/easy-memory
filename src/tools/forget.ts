@@ -103,10 +103,10 @@ export async function handleForget(
     });
 
     // D1-8: 区分错误类型 — "not_found" 仅用于 404,"error" 用于其他错误
+    // 使用 toLowerCase() 避免 Qdrant 不同版本的大小写差异（如 "Not Found" vs "Not found"）
+    const lowerMsg = error.message.toLowerCase();
     const isNotFound =
-      error.message.includes("Not found") ||
-      error.message.includes("not found") ||
-      error.message.includes("404");
+      lowerMsg.includes("not found") || lowerMsg.includes("404");
     return {
       status: isNotFound ? "not_found" : "error",
       message: `Failed to forget memory ${input.id}: ${error.message}`,

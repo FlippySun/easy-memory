@@ -10,6 +10,7 @@
 
 import type { QdrantService } from "../services/qdrant.js";
 import type { EmbeddingService } from "../services/embedding.js";
+import type { BM25Encoder } from "../services/bm25.js";
 import { log } from "../utils/logger.js";
 import {
   MemorySearchInputSchema,
@@ -25,6 +26,8 @@ import * as z from "zod/v4";
 export interface SearchHandlerDeps {
   qdrant: QdrantService;
   embedding: EmbeddingService;
+  /** [ADR 补充二十] BM25 稀疏编码器 — 可选，缺失时降级为纯 dense 检索 */
+  bm25?: BM25Encoder;
   defaultProject: string;
 }
 
@@ -54,9 +57,25 @@ export async function handleSearch(
   const project = input.project ?? deps.defaultProject;
 
   // Step 1: 生成 query embedding（使用 embedWithMeta 获取实际模型信息，用于跨模型检测）
-  const queryResult = await deps.embedding.embedWithMeta(input.query);
-  const queryVector = queryResult.vector;
-  const queryModel = queryResult.model;
+  // [FIX H-2]: 捕获 embed 异常，避免泄露内部堆栈到 MCP 客户端
+  let queryVector: number[];
+  let queryModel: string;
+  try {
+    const queryResult = await deps.embedding.embedWithMeta(input.query);
+    queryVector = queryResult.vector;
+    queryModel = queryResult.model;
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    log.error("Search embedding failed", {
+      error: error.message,
+      project,
+    });
+    return {
+      memories: [],
+      total_found: 0,
+      system_note: `Embedding service unavailable, search cannot proceed. Please retry later.`,
+    };
+  }
 
   // Step 2: 构建 Qdrant 过滤器
   const filter: Record<string, unknown> = {};
@@ -85,7 +104,7 @@ export async function handleSearch(
     filter.must = mustConditions;
   }
 
-  // Step 3: Qdrant 搜索
+  // Step 3: 生成 BM25 稀疏查询向量 + 混合检索 [ADR 补充二十]
   const searchOpts: {
     limit?: number;
     scoreThreshold?: number;
@@ -95,7 +114,14 @@ export async function handleSearch(
   if (input.threshold != null) searchOpts.scoreThreshold = input.threshold;
   if (Object.keys(filter).length > 0) searchOpts.filter = filter;
 
-  const results = await deps.qdrant.search(project, queryVector, searchOpts);
+  const sparseVector = deps.bm25?.encode(input.query);
+
+  const results = await deps.qdrant.hybridSearch(
+    project,
+    queryVector,
+    sparseVector,
+    searchOpts,
+  );
 
   // Step 4: 组装输出（boundary markers 包裹 content）
   const memories: MemorySearchResult[] = results.map((r) => ({
