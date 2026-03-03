@@ -20,7 +20,7 @@ services:
     container_name: easy-memory
     restart: always
     ports:
-      - "127.0.0.1:3080:3080"  # 仅本机可达，由 Caddy/Nginx 反代
+      - "127.0.0.1:3080:3080" # 仅本机可达，由 Caddy/Nginx 反代
     environment:
       - EASY_MEMORY_MODE=http
       - QDRANT_URL=http://qdrant:6333
@@ -38,8 +38,8 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
@@ -51,7 +51,15 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3080/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3080/health",
+        ]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -112,6 +120,31 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 5
+    networks:
+      - internal
+
+  # Init container: auto-pull Ollama embedding model on first run
+  # This ensures users don't need to manually run `docker exec ollama pull bge-m3`
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: ollama-init
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[ollama-init] Checking model $${OLLAMA_MODEL:-bge-m3}..."
+        if ollama list 2>/dev/null | grep -q "$${OLLAMA_MODEL:-bge-m3}"; then
+          echo "[ollama-init] Model already exists. Skipping."
+        else
+          echo "[ollama-init] Pulling model... (first run may take several minutes)"
+          ollama pull $${OLLAMA_MODEL:-bge-m3}
+          echo "[ollama-init] Model pull complete."
+        fi
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
     networks:
       - internal
 

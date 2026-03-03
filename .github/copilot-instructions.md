@@ -20,6 +20,24 @@
 
 ---
 
+## 🔑 敏感凭证读取约束 (Secrets Access Policy)
+
+项目根目录下的 `secrets.json` 是**唯一的本地凭证源**（已被 `.gitignore` 排除，绝对禁止提交到远端仓库）。
+
+**强制规则：**
+
+1. **禁止硬编码**：代码或配置中遇到需要密钥、Token、密码、SSH 凭证等敏感信息时，**必须**从 `secrets.json` 读取，绝对禁止在源码、环境变量模板或文档中明文写入。
+2. **读取方式**：通过 `read_file` 工具读取项目根目录的 `secrets.json` 获取所需凭证，按 JSON 路径定位（如 `github.pat_token`、`vps.host`、`vps.ssh_private_key` 等）。
+3. **当前已存储凭证**：
+   - `github.pat_token` — GitHub PAT，用于远端 Git 操作
+   - `yuque.token` — 语雀 API Token
+   - `vps.host` / `vps.ssh_port` / `vps.ssh_private_key` — VPS SSH 访问凭证
+   - `google_aistudio.api_key` — Google AI Studio API Key
+4. **扩展约定**：后续新增凭证直接追加到 `secrets.json` 对应分类下，保持结构清晰。
+5. **安全底线**：绝对禁止将 `secrets.json` 的内容输出到 `console.log`、MCP stdio 通道、或任何日志文件中。
+
+---
+
 ## ⚖️ Core Directives (绝对铁律 - 违反即判定任务失败)
 
 1. **状态机强制输出**：你的每一次回复，**必须**以这个代码块开头，表明你当前所处的阶段：

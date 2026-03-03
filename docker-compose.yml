@@ -35,10 +35,18 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3080/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3080/health",
+        ]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -78,6 +86,28 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 5
+
+  # Init container: auto-pull Ollama embedding model on first run
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: ollama-init
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[ollama-init] Checking model $${OLLAMA_MODEL:-bge-m3}..."
+        if ollama list 2>/dev/null | grep -q "$${OLLAMA_MODEL:-bge-m3}"; then
+          echo "[ollama-init] Model already exists. Skipping."
+        else
+          echo "[ollama-init] Pulling model... (first run may take several minutes)"
+          ollama pull $${OLLAMA_MODEL:-bge-m3}
+          echo "[ollama-init] Model pull complete."
+        fi
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
 
 volumes:
   qdrant_data:

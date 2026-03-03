@@ -17,7 +17,7 @@
 | 1 | [npm 发布](#1-npm-发布) | ✅ | `easy-memory@0.1.0` 已发布到 npmjs.org |
 | 2 | [Docker 化](#2-docker-化) | ✅ | 多平台镜像 (amd64+arm64) 已推送 Docker Hub |
 | 3 | [CI/CD](#3-cicd-github-actions) | ✅ | 3 个 workflow 已配置，CI 绿色通过 |
-| 4 | [VPS 部署](#4-vps-部署) | ✅ | 107.151.137.198:3080 运行中，E2E 已验证 |
+| 4 | [VPS 部署](#4-vps-部署) | ✅ | `memory.zhiz.chat` HTTPS 运行中，Gemini+Ollama 双引擎 |
 | 5 | [README 完善](#5-readme-完善) | ✅ | 完整重写，含 API 文档、环境变量参考 |
 | 6 | [E2E 真实环境测试](#6-e2e-真实环境测试) | ✅ | 404 单元测试 + E2E 全绿 |
 
@@ -95,7 +95,7 @@
 | ollama 服务 | ✅ | bash /dev/tcp 健康检查 + 模型卷 |
 | 内部网络 (`easy-memory-internal`) | ✅ | |
 | `.env.example` 环境变量模板 | ✅ | |
-| `docker compose up -d` 启动验证 | ✅ | |
+| `docker compose up -d` 启动验证 | ✅ | 含 `ollama-init` 自动拉取模型 |
 
 ### 2.3 docker-compose.prod.yml (生产覆盖)
 
@@ -162,46 +162,81 @@
 
 ## 4. VPS 部署
 
-> 目标: 在远端 VPS (`107.151.137.198`) 部署 HTTP 模式的 Easy Memory 服务。
+> 目标: 在远端 VPS (`memory.zhiz.chat`) 部署 HTTP 模式的 Easy Memory 服务，
+> 含 Nginx 反向代理 (HTTPS) + Gemini 远端向量引擎支持。
 
 ### 4.1 VPS 环境准备
 
 | 条目 | 状态 | 说明 |
 |------|------|------|
-| SSH 连接验证 | ✅ | `root@107.151.137.198:22` |
+| SSH 连接验证 | ✅ | `root@zhiz.chat:22` (域名直连) |
 | Docker + Docker Compose 安装/更新 | ✅ | Docker 29.2.1, Compose v5.0.2 |
-| Caddy 安装 | ⏭️ | 无域名，暂用 IP 直连 |
-| 域名 DNS 解析配置 | ⏭️ | 暂无域名 |
-| 防火墙配置（80/443 开放） | ✅ | 端口 3080 开放 |
+| Nginx 反向代理 (宝塔) | ✅ | `memory.zhiz.chat` → `127.0.0.1:3080` |
+| 域名 DNS 解析配置 | ✅ | `*.zhiz.chat` → VPS IP (通配符) |
+| SSL/TLS 证书 | ✅ | Let's Encrypt 通配符 `*.zhiz.chat` (自动续签) |
+| 防火墙配置 | ✅ | 80/443 开放，3080 仅本机可达 |
 
 ### 4.2 部署文件准备
 
 | 条目 | 状态 | 说明 |
 |------|------|------|
 | 生产环境 `.env` 配置文件 | ✅ | `/opt/easy-memory/.env` |
-| `docker-compose.prod.yml` 适配 VPS | ✅ | `/opt/easy-memory/docker-compose.yml` |
-| Caddy 配置文件部署 | ⏭️ | 暂不需要 |
-| 部署自动化脚本 | ⏭️ | 手动部署完成 |
+| `docker-compose.yml` 适配 VPS | ✅ | 含 `ollama-init` 自动拉取模型 |
+| Nginx 反向代理配置 | ✅ | `/www/server/panel/vhost/nginx/memory.zhiz.chat.conf` |
 
-### 4.3 部署执行
+### 4.3 反向代理配置
+
+| 条目 | 状态 | 说明 |
+|------|------|------|
+| Nginx vhost 创建 | ✅ | `memory.zhiz.chat` → `proxy_pass 127.0.0.1:3080` |
+| SSL 证书挂载 | ✅ | 复用 `*.zhiz.chat` 通配符证书 |
+| HSTS 头 | ✅ | `Strict-Transport-Security: max-age=31536000` |
+| X-Forwarded-* 头透传 | ✅ | `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` |
+| 端口安全 | ✅ | Docker 端口 `127.0.0.1:3080` 仅本机可达 |
+| `TRUST_PROXY=true` | ✅ | 信任反代头 |
+| `REQUIRE_TLS=true` | ✅ | 拒绝非 HTTPS 请求 |
+
+### 4.4 Gemini 远端向量引擎部署
+
+> **⚠️ 重要**: VPS 作为公共服务，**必须**启用 Gemini 双引擎模式。
+
+| 条目 | 状态 | 说明 |
+|------|------|------|
+| `GEMINI_API_KEY` 配置 | ✅ | 从 `secrets.json → google_aistudio.api_key` 读取并写入 VPS `.env` |
+| `EMBEDDING_PROVIDER=auto` | ✅ | Gemini 优先，Ollama 自动兜底 |
+| 断路器验证 | ✅ | Gemini 429 限流 → 自动降级 Ollama → 请求成功 |
+| 日志确认双引擎工作 | ✅ | 日志可见 `Fallback to ollama succeeded` |
+
+**部署 Gemini 到 VPS 的步骤**:
+1. 从 `secrets.json` 读取 `google_aistudio.api_key`
+2. SSH 到 VPS: `ssh root@zhiz.chat`
+3. 编辑 `/opt/easy-memory/.env`:
+   ```
+   EMBEDDING_PROVIDER=auto
+   GEMINI_API_KEY=<从 secrets.json 获取的 key>
+   ```
+4. 重启服务: `cd /opt/easy-memory && docker compose down && docker compose up -d`
+5. 验证: `curl https://memory.zhiz.chat/health` 确认服务正常
+
+### 4.5 部署执行
 
 | 条目 | 状态 | 说明 |
 |------|------|------|
 | 上传项目文件到 VPS | ✅ | scp 上传 compose 文件 |
-| 拉取 bge-m3 模型 | ✅ | 1.2GB 下载完成 |
-| `docker compose up -d` 启动服务 | ✅ | 3 容器全部运行 |
-| Caddy 启动并自动获取 TLS 证书 | ⏭️ | 无域名 |
-| 健康检查验证 | ✅ | `curl /health` → `{"status":"ok","mode":"http"}` |
+| 拉取 bge-m3 模型 | ✅ | `ollama-init` 容器自动拉取 |
+| `docker compose up -d` 启动服务 | ✅ | 4 容器全部 healthy |
+| 健康检查验证 | ✅ | `curl https://memory.zhiz.chat/health` → `{"status":"ok"}` |
 
-### 4.4 部署后验证
+### 4.6 部署后验证
 
 | 条目 | 状态 | 说明 |
 |------|------|------|
-| HTTP API `save` → `search` → `forget` 闭环测试 | ✅ | save 返回 id，search score=1 |
+| HTTP API `save` → `search` → `forget` 闭环测试 | ✅ | HTTPS 域名 E2E 验证通过 |
 | Bearer Token 鉴权验证 | ✅ | |
-| TLS 证书验证 | ⏭️ | 无域名，REQUIRE_TLS=false |
+| TLS 证书验证 | ✅ | Let's Encrypt 通配符，HSTS |
 | 日志输出正常 | ✅ | |
 | 进程重启恢复 | ✅ | restart: always |
+| Gemini 双引擎验证 | ✅ | auto 模式：Gemini → Ollama 降级正常 |
 
 ---
 
@@ -307,7 +342,7 @@
 | npm 发布 | `npm.token` | `.npmrc` / GitHub Secret `NPM_TOKEN` |
 | Docker Hub | `docker.user_name` + `docker.token` | GitHub Secrets `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` |
 | GitHub Actions | `github.pat_token` | Repo Secrets（如需强权限操作） |
-| VPS SSH | `vps.host` + `vps.ssh_port` + `vps.ssh_private_key` | 部署脚本 |
+| VPS SSH | `vps.host` + `vps.ssh_port` + `vps.ssh_private_key` | `ssh root@zhiz.chat` 或 `ssh root@<VPS IP>` |
 | Gemini API | `google_aistudio.api_key` | VPS `.env` 中的 `GEMINI_API_KEY` |
 
 ---
@@ -323,7 +358,7 @@
   ↓
 3. CI/CD ✅ → 3 workflows, CI green
   ↓
-4. VPS 部署 ✅ → 107.151.137.198:3080
+4. VPS 部署 ✅ → memory.zhiz.chat (HTTPS + Gemini 双引擎)
   ↓
 5. README 完善 ✅ → 完整重写
 ```
