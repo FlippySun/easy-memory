@@ -12,15 +12,15 @@
 
 ## 总览
 
-| #   | 板块                                    | 状态 | 备注                                                  |
-| --- | --------------------------------------- | ---- | ----------------------------------------------------- |
-| 1   | [npm 发布](#1-npm-发布)                 | ✅   | `easy-memory@0.1.0` 已发布到 npmjs.org                |
-| 2   | [Docker 化](#2-docker-化)               | ✅   | 多平台镜像 (amd64+arm64) 已推送 Docker Hub            |
-| 3   | [CI/CD](#3-cicd-github-actions)         | ✅   | 3 个 workflow 已配置，CI 绿色通过                     |
-| 4   | [VPS 部署](#4-vps-部署)                 | ✅   | `memory.zhiz.chat` HTTPS 运行中，Gemini+Ollama 双引擎 |
-| 5   | [README 完善](#5-readme-完善)           | ✅   | 完整重写，含 API 文档、环境变量参考                   |
-| 6   | [E2E 真实环境测试](#6-e2e-真实环境测试) | ✅   | 404 单元测试 + E2E 全绿                               |
-| 7   | [Breaking Changes](#7-️-breaking-changes-记录-v020) | ✅ | Vertex AI 迁移 GEMINI_PROJECT_ID 必填 |
+| #   | 板块                                               | 状态 | 备注                                                  |
+| --- | -------------------------------------------------- | ---- | ----------------------------------------------------- |
+| 1   | [npm 发布](#1-npm-发布)                            | ✅   | `easy-memory@0.1.0` 已发布到 npmjs.org                |
+| 2   | [Docker 化](#2-docker-化)                          | ✅   | 多平台镜像 (amd64+arm64) 已推送 Docker Hub            |
+| 3   | [CI/CD](#3-cicd-github-actions)                    | ✅   | 3 个 workflow 已配置，CI 绿色通过                     |
+| 4   | [VPS 部署](#4-vps-部署)                            | ✅   | `memory.zhiz.chat` HTTPS 运行中，Gemini+Ollama 双引擎 |
+| 5   | [README 完善](#5-readme-完善)                      | ✅   | 完整重写，含 API 文档、环境变量参考                   |
+| 6   | [E2E 真实环境测试](#6-e2e-真实环境测试)            | ✅   | 404 单元测试 + E2E 全绿                               |
+| 7   | [Breaking Changes](#7-️-breaking-changes-记录-v020) | ✅   | Vertex AI 迁移 GEMINI_PROJECT_ID 必填                 |
 
 ---
 
@@ -300,15 +300,15 @@
 
 ### 7.1 Vertex AI 迁移 — `GEMINI_PROJECT_ID` 新增必填
 
-| 条目 | 说明 |
-| ---- | ---- |
-| **影响版本** | v0.2.0+ |
-| **影响范围** | `EMBEDDING_PROVIDER=gemini` 或 `auto` 的所有部署 |
-| **变更原因** | Gemini Embedding 从 Generative Language API 迁移至 Vertex AI（更好的区域控制、配额管理、MRL 支持） |
-| **破坏性表现** | 缺少 `GEMINI_PROJECT_ID` 时服务启动立即抛出异常 → **crash** |
-| **修复方式** | 新增环境变量 `GEMINI_PROJECT_ID=<your-gcp-project-id>` |
-| **Ollama 用户** | **不受影响**（`EMBEDDING_PROVIDER=ollama` 为默认值） |
-| **README 同步** | ✅ 已在 README.md 新增 Breaking Changes 章节 |
+| 条目            | 说明                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------- |
+| **影响版本**    | v0.2.0+                                                                                            |
+| **影响范围**    | `EMBEDDING_PROVIDER=gemini` 或 `auto` 的所有部署                                                   |
+| **变更原因**    | Gemini Embedding 从 Generative Language API 迁移至 Vertex AI（更好的区域控制、配额管理、MRL 支持） |
+| **破坏性表现**  | 缺少 `GEMINI_PROJECT_ID` 时服务启动立即抛出异常 → **crash**                                        |
+| **修复方式**    | 新增环境变量 `GEMINI_PROJECT_ID=<your-gcp-project-id>`                                             |
+| **Ollama 用户** | **不受影响**（`EMBEDDING_PROVIDER=ollama` 为默认值）                                               |
+| **README 同步** | ✅ 已在 README.md 新增 Breaking Changes 章节                                                       |
 
 ---
 

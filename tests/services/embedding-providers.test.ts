@@ -971,7 +971,12 @@ describe("GeminiProvider isCircuitOpen forwarding (FIX F-1)", () => {
       if (fetchCallCount === 1) {
         circuitOpen = true;
         // 5xx → retryable
-        return { ok: false, status: 500, statusText: "Server Error", text: async () => "" };
+        return {
+          ok: false,
+          status: 500,
+          statusText: "Server Error",
+          text: async () => "",
+        };
       }
       return {
         ok: true,
@@ -1049,9 +1054,7 @@ describe("Post-sleep circuit breaker check (FIX F-2)", () => {
     // Simulate circuit opening during sleep period
     circuitOpen = true;
 
-    await expect(embedPromise).rejects.toThrow(
-      /circuit breaker opened/,
-    );
+    await expect(embedPromise).rejects.toThrow(/circuit breaker opened/);
     // Only the first fetch call should have been made
     expect(fetchCallCount).toBe(1);
   });

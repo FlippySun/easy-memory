@@ -175,8 +175,7 @@ export async function handleSearch(
   const mismatchedCount = results.filter(
     (r) =>
       r.payload.embedding_model &&
-      String(r.payload.embedding_model).toLowerCase() !==
-        normalizedQueryModel,
+      String(r.payload.embedding_model).toLowerCase() !== normalizedQueryModel,
   ).length;
 
   let systemNote = SYSTEM_NOTE;

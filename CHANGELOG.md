@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-07-03
+
+### Fixed
+
+- **[FIX H-5] Gemini healthCheck Vertex AI 兼容**: 修复 Vertex AI 不支持 GET model info 端点（返回 404）的问题。改用轻量 POST predict 调用（输入 `"ok"`，约 1 token），验证端到端连通性。
+
+### Changed
+
+- npm publish CI/CD 修复：移除 npm 2FA 限制以支持自动化发布。
+
 ## [0.2.0] - 2025-07-02
 
 ### ⚠ BREAKING CHANGES

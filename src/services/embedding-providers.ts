@@ -597,12 +597,21 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
     this._activeControllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      // [FIX H-4]: URL 和 headers 包含 projectId 和 API Key。
+      // [FIX H-5]: Vertex AI 不支持 GET model info（返回 404）。
+      // 改为轻量级 predict 调用（输入 "ok"，~1 token）验证端到端可用性。
       // catch 块必须静默返回 false，绝对禁止记录 URL/headers 到日志。
-      const url = `https://${this.region}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/${this.modelName}`;
+      const url = `https://${this.region}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/${this.modelName}:predict`;
       const response = await fetch(url, {
+        method: "POST",
         signal: controller.signal,
-        headers: { "x-goog-api-key": this.apiKey },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.apiKey,
+        },
+        body: JSON.stringify({
+          instances: [{ content: "ok" }],
+          parameters: { outputDimensionality: this.outputDimensionality },
+        }),
       });
       return response.ok;
     } catch {
