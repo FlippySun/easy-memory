@@ -231,4 +231,36 @@ describe("handleSave", () => {
     );
     expect(result.status).toBe("rejected_prompt_injection");
   });
+
+  // =========================================================================
+  // [FIX L-2] 模型名标准化为小写
+  // =========================================================================
+
+  it("should normalize embedding model name to lowercase (FIX L-2)", async () => {
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
+      vector: new Array(1024).fill(0.2),
+      model: "Gemini-Embedding-001", // 混合大小写
+      provider: "gemini",
+    });
+
+    await handleSave({ content: "L2 normalization test content" }, deps);
+
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    const payload = upsertCall[1][0].payload;
+    // 应存储为小写
+    expect(payload.embedding_model).toBe("gemini-embedding-001");
+  });
+
+  it("should store already lowercase model name as-is (FIX L-2)", async () => {
+    // 默认 mock 返回 "bge-m3"
+    await handleSave({ content: "lowercase model test" }, deps);
+
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    const payload = upsertCall[1][0].payload;
+    expect(payload.embedding_model).toBe("bge-m3");
+  });
 });

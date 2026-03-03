@@ -19,6 +19,8 @@ describe("parseAppConfig", () => {
     expect(config.ollamaBaseUrl).toBe("http://localhost:11434");
     expect(config.ollamaModel).toBe("bge-m3");
     expect(config.geminiApiKey).toBe("");
+    expect(config.geminiProjectId).toBe("");
+    expect(config.geminiRegion).toBe("us-central1");
     expect(config.geminiModel).toBe("gemini-embedding-001");
     expect(config.defaultProject).toBe("default");
     expect(config.rateLimitPerMinute).toBe(60);
@@ -64,24 +66,49 @@ describe("parseAppConfig", () => {
   });
 
   it("should throw when gemini mode lacks GEMINI_API_KEY", () => {
-    expect(() => parseAppConfig({ EMBEDDING_PROVIDER: "gemini" })).toThrow(
-      /requires GEMINI_API_KEY/,
-    );
+    expect(() =>
+      parseAppConfig({ EMBEDDING_PROVIDER: "gemini", GEMINI_PROJECT_ID: "p" }),
+    ).toThrow(/requires GEMINI_API_KEY/);
   });
 
   it("should throw when auto mode lacks GEMINI_API_KEY", () => {
-    expect(() => parseAppConfig({ EMBEDDING_PROVIDER: "auto" })).toThrow(
-      /requires GEMINI_API_KEY/,
-    );
+    expect(() =>
+      parseAppConfig({ EMBEDDING_PROVIDER: "auto", GEMINI_PROJECT_ID: "p" }),
+    ).toThrow(/requires GEMINI_API_KEY/);
   });
 
-  it("should accept gemini mode with GEMINI_API_KEY", () => {
+  it("should throw when gemini mode lacks GEMINI_PROJECT_ID", () => {
+    expect(() =>
+      parseAppConfig({ EMBEDDING_PROVIDER: "gemini", GEMINI_API_KEY: "k" }),
+    ).toThrow(/requires GEMINI_PROJECT_ID/);
+  });
+
+  it("should throw when auto mode lacks GEMINI_PROJECT_ID", () => {
+    expect(() =>
+      parseAppConfig({ EMBEDDING_PROVIDER: "auto", GEMINI_API_KEY: "k" }),
+    ).toThrow(/requires GEMINI_PROJECT_ID/);
+  });
+
+  it("should accept gemini mode with GEMINI_API_KEY and GEMINI_PROJECT_ID", () => {
     const config = parseAppConfig({
       EMBEDDING_PROVIDER: "gemini",
       GEMINI_API_KEY: "test-key",
+      GEMINI_PROJECT_ID: "test-project",
     });
     expect(config.embeddingProvider).toBe("gemini");
     expect(config.geminiApiKey).toBe("test-key");
+    expect(config.geminiProjectId).toBe("test-project");
+    expect(config.geminiRegion).toBe("us-central1");
+  });
+
+  it("should override geminiRegion via GEMINI_REGION env var", () => {
+    const config = parseAppConfig({
+      EMBEDDING_PROVIDER: "gemini",
+      GEMINI_API_KEY: "test-key",
+      GEMINI_PROJECT_ID: "test-project",
+      GEMINI_REGION: "asia-northeast1",
+    });
+    expect(config.geminiRegion).toBe("asia-northeast1");
   });
 
   it("should throw on invalid EASY_MEMORY_MODE", () => {
@@ -142,6 +169,7 @@ describe("createContainer", () => {
     const config = parseAppConfig({
       EMBEDDING_PROVIDER: "auto",
       GEMINI_API_KEY: "test-key",
+      GEMINI_PROJECT_ID: "test-project",
     });
     const container = createContainer(config);
 
@@ -154,6 +182,7 @@ describe("createContainer", () => {
     const config = parseAppConfig({
       EMBEDDING_PROVIDER: "gemini",
       GEMINI_API_KEY: "test-key",
+      GEMINI_PROJECT_ID: "test-project",
     });
     const container = createContainer(config);
 
@@ -164,6 +193,7 @@ describe("createContainer", () => {
     const config = parseAppConfig({
       EMBEDDING_PROVIDER: "auto",
       GEMINI_API_KEY: "test-key",
+      GEMINI_PROJECT_ID: "test-project",
       GEMINI_MAX_PER_DAY: "0", // will fallback to 2000
     });
     const container = createContainer(config);

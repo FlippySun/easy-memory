@@ -92,6 +92,12 @@ export const MemorySearchInputSchema = z
     threshold: z.number().min(0).max(1).default(0.55),
     include_outdated: z.boolean().default(false),
     tags: z.array(z.string()).optional(),
+    /**
+     * [FIX C-2] 是否允许跨模型搜索。
+     * 默认 false: 仅返回与查询向量同一模型编码的记忆（防止向量空间污染）。
+     * 设为 true: 返回所有模型的记忆（score 可能不准确，附带警告）。
+     */
+    cross_model: z.boolean().default(false),
   })
   .passthrough();
 

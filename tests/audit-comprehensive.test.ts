@@ -779,9 +779,9 @@ describe("Audit #14: 最小权限", () => {
   it("should mandate Gemini API key", async () => {
     const { GeminiEmbeddingProvider } =
       await import("../src/services/embedding-providers.js");
-    expect(() => new GeminiEmbeddingProvider({ apiKey: "" })).toThrow(
-      "API key is required",
-    );
+    expect(
+      () => new GeminiEmbeddingProvider({ apiKey: "", projectId: "p" }),
+    ).toThrow("API key is required");
   });
 
   it("should only expose 4 MCP tools (CRUD + status, no admin ops)", () => {
@@ -807,9 +807,12 @@ describe("Audit #15: TLS + 静态加密", () => {
     // that the provider constructs correctly
     const { GeminiEmbeddingProvider } =
       await import("../src/services/embedding-providers.js");
-    const provider = new GeminiEmbeddingProvider({ apiKey: "test-key" });
+    const provider = new GeminiEmbeddingProvider({
+      apiKey: "test-key",
+      projectId: "test-project",
+    });
     expect(provider.name).toBe("gemini");
-    // The URL is hardcoded as https://generativelanguage.googleapis.com in doFetch
+    // The URL is hardcoded as https://{region}-aiplatform.googleapis.com in doFetch
     // This is a source-code level guarantee
     provider.close();
   });

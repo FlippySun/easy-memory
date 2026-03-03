@@ -4,7 +4,7 @@
  *
  * 提供两种 Provider:
  * - OllamaEmbeddingProvider: 本地 Ollama (bge-m3, 1024 维)
- * - GeminiEmbeddingProvider: 远端 Gemini (gemini-embedding-001, MRL 1024 维)
+ * - GeminiEmbeddingProvider: 远端 Google Cloud Vertex AI (gemini-embedding-001, MRL 1024 维)
  *
  * 共同职责:
  * - 超时控制 (AbortController)
@@ -47,6 +47,26 @@ export function validateVector(vector: number[], expectedDim: number): void {
 }
 
 // =========================================================================
+// Error Classification [FIX H-1]
+// =========================================================================
+
+/**
+ * 不可重试错误 — 认证失败、请求格式错误等永久性异常。
+ * BaseEmbeddingProvider.embed() 捕获此类错误后直接上抛，不进入重试循环。
+ *
+ * 覆盖场景: HTTP 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden), 404 (Not Found)
+ */
+export class NonRetryableError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode?: number,
+  ) {
+    super(message);
+    this.name = "NonRetryableError";
+  }
+}
+
+// =========================================================================
 // Provider 接口
 // =========================================================================
 
@@ -79,6 +99,12 @@ export interface EmbeddingProvider {
 export interface BaseProviderConfig {
   timeoutMs?: number;
   maxRetries?: number;
+  /**
+   * [FIX C-1] 熔断器状态检查回调。
+   * 每次重试前调用，返回 true 表示熔断器已打开，应立即中止重试循环。
+   * 防止并发雷暴期间已进入 Provider 重试的请求继续浪费 API 调用。
+   */
+  isCircuitOpen?: () => boolean;
 }
 
 /**
@@ -95,15 +121,21 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
 
   protected readonly timeoutMs: number;
   protected readonly maxRetries: number;
+  /** [FIX C-1] 外部熔断器状态检查回调 */
+  protected readonly isCircuitOpen: (() => boolean) | undefined;
 
   /** 跟踪所有进行中的请求，以便 close() 全部中止 */
   protected readonly _activeControllers: Set<AbortController> = new Set();
+  /** 跟踪 pending retry sleep 的 reject 函数，以便 close() 立即中断 */
+  protected readonly _pendingSleepRejects: Set<(reason: Error) => void> =
+    new Set();
   /** 标记 close() 是否已被调用，区分 abort 来源 */
   protected _closedByShutdown = false;
 
   constructor(config: BaseProviderConfig = {}) {
     this.timeoutMs = config.timeoutMs ?? 10_000;
     this.maxRetries = config.maxRetries ?? 5;
+    this.isCircuitOpen = config.isCircuitOpen;
   }
 
   /**
@@ -113,6 +145,21 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      // 前置守卫: close() 后立即中止循环 (不创建新的 sleep/fetch promise)
+      if (this._closedByShutdown) {
+        throw new Error(
+          `${this.name} request aborted: service is shutting down`,
+        );
+      }
+
+      // [FIX C-1]: 熔断器检查 — 防止并发雷暴期间已进入重试的请求继续浪费 API 调用
+      // 仅在 attempt > 0 时检查（首次尝试已在 EmbeddingService 层过滤）
+      if (attempt > 0 && this.isCircuitOpen?.()) {
+        throw new Error(
+          `${this.name} retry aborted: circuit breaker opened during retry`,
+        );
+      }
+
       try {
         if (attempt > 0) {
           const delay = this.getRetryDelay(attempt);
@@ -120,12 +167,28 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
             `${this.name} retry ${attempt}/${this.maxRetries}, waiting ${delay}ms`,
           );
           await this.sleep(delay);
+
+          // [FIX F-2]: sleep 后二次检查熔断器 — sleep 期间熔断器可能已打开
+          if (this.isCircuitOpen?.()) {
+            throw new Error(
+              `${this.name} retry aborted: circuit breaker opened during sleep`,
+            );
+          }
         }
 
         const vector = await this.safeFetch(text);
         validateVector(vector, this.dimension);
         return vector;
       } catch (err: unknown) {
+        // [FIX H-1]: 不可重试错误直接上抛，不进入重试循环
+        if (err instanceof NonRetryableError) {
+          log.warn(`${this.name} non-retryable error, aborting retry`, {
+            error: err.message,
+            statusCode: err.statusCode,
+          });
+          throw err;
+        }
+
         lastError = err instanceof Error ? err : new Error(String(err));
         log.warn(
           `${this.name} attempt ${attempt + 1}/${this.maxRetries} failed`,
@@ -142,7 +205,7 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
   abstract healthCheck(): Promise<boolean>;
 
   /**
-   * 关闭 Provider，中止所有进行中的请求。
+   * 关闭 Provider，中止所有进行中的请求和 pending sleep。
    */
   close(): void {
     this._closedByShutdown = true;
@@ -150,6 +213,15 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
       controller.abort();
     }
     this._activeControllers.clear();
+
+    // 立即中断所有 pending retry sleep (FIX-2: 不再等待 sleep 自然到期)
+    const shutdownError = new Error(
+      `${this.name} request aborted: service is shutting down`,
+    );
+    for (const reject of this._pendingSleepRejects) {
+      reject(shutdownError);
+    }
+    this._pendingSleepRejects.clear();
   }
 
   // ----- Template Method: 子类实现 -----
@@ -167,10 +239,13 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
 
   /**
    * 计算第 attempt 次重试的等待时间 (ms)。
-   * 默认: 指数退避 (1s, 2s, 4s, 8s...)
+   * 默认: 指数退避 (1s, 2s, 4s, 8s...) + ±20% jitter
+   *
+   * [FIX M-1]: 添加 jitter 防止并发请求重试形成同步脉冲 (Thundering Herd)
    */
   protected getRetryDelay(attempt: number): number {
-    return Math.pow(2, attempt - 1) * 1000;
+    const baseDelay = Math.pow(2, attempt - 1) * 1000;
+    return Math.round(baseDelay * (0.8 + Math.random() * 0.4));
   }
 
   // ----- 内部工具 -----
@@ -209,7 +284,24 @@ export abstract class BaseEmbeddingProvider implements EmbeddingProvider {
   }
 
   protected sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    // 前置守卫: 已关闭则立即返回 rejected promise (不进入 constructor)
+    if (this._closedByShutdown) {
+      return Promise.reject(
+        new Error(`${this.name} request aborted: service is shutting down`),
+      );
+    }
+    return new Promise<void>((resolve, reject) => {
+      const doReject = (reason: Error): void => {
+        clearTimeout(timer);
+        this._pendingSleepRejects.delete(doReject);
+        reject(reason);
+      };
+      const timer = setTimeout(() => {
+        this._pendingSleepRejects.delete(doReject);
+        resolve();
+      }, ms);
+      this._pendingSleepRejects.add(doReject);
+    });
   }
 }
 
@@ -244,6 +336,7 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
     super({
       timeoutMs: config.timeoutMs ?? 120_000,
       maxRetries: config.maxRetries ?? 5,
+      ...(config.isCircuitOpen ? { isCircuitOpen: config.isCircuitOpen } : {}),
     });
     this.baseUrl = config.baseUrl ?? "http://localhost:11434";
     this.modelName = config.model ?? "bge-m3";
@@ -265,6 +358,12 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
     });
 
     if (!response.ok) {
+      // [FIX M-3]: 消费 response body 防止 HTTP/1.1 连接泄漏
+      try {
+        await response.text();
+      } catch {
+        /* body 读取失败不影响主流程 */
+      }
       throw new Error(
         `Ollama embedding failed: ${response.status} ${response.statusText}`,
       );
@@ -292,6 +391,7 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
       // 使用独立的 AbortController + 3s timeout，防止 /api/tags 耗尽共享超时
       try {
         const probeController = new AbortController();
+        this._activeControllers.add(probeController);
         const probeTimeout = setTimeout(() => probeController.abort(), 3000);
         try {
           const probeResponse = await fetch(`${this.baseUrl}/api/embeddings`, {
@@ -322,6 +422,7 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
           }
         } finally {
           clearTimeout(probeTimeout);
+          this._activeControllers.delete(probeController);
         }
       } catch {
         // 探测失败不阻断 healthCheck — 将在首次 embed 时由 validateVector 捕获
@@ -344,19 +445,34 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
 
 export interface GeminiProviderConfig extends BaseProviderConfig {
   apiKey: string;
+  projectId: string;
+  region?: string;
   model?: string;
   outputDimensionality?: number;
 }
 
-interface GeminiEmbeddingResponse {
-  embedding: { values: number[] };
+/**
+ * Vertex AI Text Embeddings API 响应格式。
+ * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api
+ */
+interface VertexAIEmbeddingResponse {
+  predictions: Array<{
+    embeddings: {
+      values: number[];
+      statistics?: {
+        truncated: boolean;
+        token_count: number;
+      };
+    };
+  }>;
 }
 
 /**
- * Gemini Embedding Provider — 远端 Google AI。
+ * Gemini Embedding Provider — 远端 Google Cloud Vertex AI。
  *
- * - Endpoint: POST /v1beta/models/{model}:embedContent
+ * - Endpoint: POST /v1/projects/{PROJECT}/locations/{REGION}/publishers/google/models/{MODEL}:predict
  * - Model: gemini-embedding-001 (MRL → 1024 维)
+ * - Auth: x-goog-api-key header
  * - 默认超时: 30s (远端网络), 3 次重试
  * - 特殊处理: 429 (Rate Limit) 用更长退避
  */
@@ -365,37 +481,48 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
   readonly modelName: string;
   readonly dimension: number;
   private readonly apiKey: string;
+  private readonly projectId: string;
+  private readonly region: string;
   private readonly outputDimensionality: number;
 
   constructor(config: GeminiProviderConfig) {
     super({
       timeoutMs: config.timeoutMs ?? 30_000,
       maxRetries: config.maxRetries ?? 3,
+      ...(config.isCircuitOpen ? { isCircuitOpen: config.isCircuitOpen } : {}),
     });
     if (!config.apiKey) {
       throw new Error("Gemini API key is required");
     }
+    if (!config.projectId) {
+      throw new Error("Gemini Project ID is required");
+    }
     this.apiKey = config.apiKey;
+    this.projectId = config.projectId;
+    this.region = config.region ?? "us-central1";
     this.modelName = config.model ?? "gemini-embedding-001";
     this.outputDimensionality = config.outputDimensionality ?? 1024;
     this.dimension = this.outputDimensionality;
   }
 
   /**
-   * Gemini 429 场景下使用更长的退避间隔 (2s, 4s, 8s...)。
+   * Gemini 429 场景下使用更长的退避间隔 (2s, 4s, 8s...) + ±20% jitter。
+   *
+   * [FIX M-1]: 添加 jitter 防止并发请求重试形成同步脉冲
    */
   protected getRetryDelay(attempt: number): number {
-    return Math.pow(2, attempt - 1) * 2000;
+    const baseDelay = Math.pow(2, attempt - 1) * 2000;
+    return Math.round(baseDelay * (0.8 + Math.random() * 0.4));
   }
 
   protected async doFetch(
     text: string,
     signal: AbortSignal,
   ): Promise<number[]> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:embedContent`;
+    const url = `https://${this.region}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/${this.modelName}:predict`;
     const body = JSON.stringify({
-      content: { parts: [{ text }] },
-      outputDimensionality: this.outputDimensionality,
+      instances: [{ content: text }],
+      parameters: { outputDimensionality: this.outputDimensionality },
     });
 
     const response = await fetch(url, {
@@ -408,25 +535,61 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
       signal,
     });
 
+    // [FIX H-2]: 解析 429 详情，区分临时限流 vs 配额耗尽 (RESOURCE_EXHAUSTED)
     if (response.status === 429) {
+      let isQuotaExhausted = false;
+      try {
+        const errorBody = await response.text();
+        isQuotaExhausted = /RESOURCE_EXHAUSTED|quota|daily.?limit/i.test(
+          errorBody,
+        );
+      } catch {
+        /* body 读取失败不影响主流程 */
+      }
+
+      if (isQuotaExhausted) {
+        // 配额耗尽是不可重试的 — 立即失败，让熔断器快速打开
+        throw new NonRetryableError(
+          "Gemini quota exhausted (429 RESOURCE_EXHAUSTED)",
+          429,
+        );
+      }
+      // 临时限流 — 可重试（由 base class 指数退避处理）
       throw new Error("Gemini rate limited (429)");
     }
 
     if (!response.ok) {
+      // [FIX M-3]: 消费 response body 防止 HTTP/1.1 连接泄漏
+      try {
+        await response.text();
+      } catch {
+        /* body 读取失败不影响主流程 */
+      }
+
+      // [FIX H-1]: 4xx (非 429/408) 为不可重试错误 — 认证失败、权限不足等
+      if (
+        response.status >= 400 &&
+        response.status < 500 &&
+        response.status !== 408
+      ) {
+        throw new NonRetryableError(
+          `Gemini embedding failed: ${response.status} ${response.statusText}`,
+          response.status,
+        );
+      }
+
+      // 5xx 服务端错误 — 可重试
       throw new Error(
         `Gemini embedding failed: ${response.status} ${response.statusText}`,
       );
     }
 
-    const data = (await response.json()) as GeminiEmbeddingResponse;
-    if (
-      !data.embedding?.values ||
-      !Array.isArray(data.embedding.values) ||
-      data.embedding.values.length === 0
-    ) {
+    const data = (await response.json()) as VertexAIEmbeddingResponse;
+    const values = data.predictions?.[0]?.embeddings?.values;
+    if (!Array.isArray(values) || values.length === 0) {
       throw new Error("Gemini returned empty embedding");
     }
-    return data.embedding.values;
+    return values;
   }
 
   async healthCheck(): Promise<boolean> {
@@ -434,15 +597,16 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
     this._activeControllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}`,
-        {
-          signal: controller.signal,
-          headers: { "x-goog-api-key": this.apiKey },
-        },
-      );
+      // [FIX H-4]: URL 和 headers 包含 projectId 和 API Key。
+      // catch 块必须静默返回 false，绝对禁止记录 URL/headers 到日志。
+      const url = `https://${this.region}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/${this.modelName}`;
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { "x-goog-api-key": this.apiKey },
+      });
       return response.ok;
     } catch {
+      // [FIX H-4]: 静默处理 — 不记录错误详情，防止 API Key/projectId 泄露到堆栈
       return false;
     } finally {
       clearTimeout(timeout);

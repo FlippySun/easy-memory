@@ -252,4 +252,94 @@ describe("handleSearch", () => {
     expect(result.system_note).not.toContain("ECONNREFUSED");
     expect(result.system_note).not.toContain("127.0.0.1");
   });
+
+  // =========================================================================
+  // [FIX C-2] embedding_model 过滤 + cross_model 参数
+  // =========================================================================
+
+  it("should add embedding_model filter by default (cross_model=false)", async () => {
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
+      vector: new Array(1024).fill(0.1),
+      model: "bge-m3",
+      provider: "ollama",
+    });
+
+    await handleSearch({ query: "test" }, deps);
+
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const opts = searchCall[3];
+    expect(opts?.filter?.must).toBeDefined();
+
+    // 查找 embedding_model 过滤条件（should 嵌套）
+    const modelFilter = opts.filter.must.find(
+      (c: any) => c.should !== undefined,
+    );
+    expect(modelFilter).toBeDefined();
+    expect(modelFilter.should).toHaveLength(3);
+
+    // 第一个条件: match by model name（小写标准化）
+    expect(modelFilter.should[0]).toEqual({
+      key: "embedding_model",
+      match: { value: "bge-m3" },
+    });
+
+    // 第二个条件: is_empty — 向后兼容没有 embedding_model 字段的旧记录
+    expect(modelFilter.should[1]).toEqual({
+      is_empty: { key: "embedding_model" },
+    });
+
+    // [FIX F-2] 第三个条件: "unknown" — 兼容 schema default 为 "unknown" 的旧记忆
+    expect(modelFilter.should[2]).toEqual({
+      key: "embedding_model",
+      match: { value: "unknown" },
+    });
+  });
+
+  it("should skip embedding_model filter when cross_model=true", async () => {
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
+      vector: new Array(1024).fill(0.1),
+      model: "bge-m3",
+      provider: "ollama",
+    });
+
+    await handleSearch({ query: "test", cross_model: true }, deps);
+
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const opts = searchCall[3];
+
+    // must 中不应有 should 嵌套的 embedding_model 过滤
+    const modelFilter = opts?.filter?.must?.find(
+      (c: any) => c.should !== undefined,
+    );
+    expect(modelFilter).toBeUndefined();
+  });
+
+  // [FIX L-2]: 模型名标准化验证
+  it("should normalize model name to lowercase for filter comparison", async () => {
+    (
+      deps.embedding.embedWithMeta as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
+      vector: new Array(1024).fill(0.1),
+      model: "BGE-M3", // 大写模型名
+      provider: "ollama",
+    });
+
+    await handleSearch({ query: "test" }, deps);
+
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const opts = searchCall[3];
+
+    const modelFilter = opts.filter.must.find(
+      (c: any) => c.should !== undefined,
+    );
+    // 应使用小写
+    expect(modelFilter.should[0].match.value).toBe("bge-m3");
+  });
 });

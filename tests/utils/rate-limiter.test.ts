@@ -196,6 +196,111 @@ describe("RateLimiter", () => {
   });
 
   // =========================================================================
+  // Failure-Driven Circuit Breaker
+  // =========================================================================
+
+  describe("recordGeminiFailure (failure-driven circuit breaker)", () => {
+    it("should not open circuit on single failure", () => {
+      const limiter = new RateLimiter();
+      limiter.recordGeminiFailure();
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+    });
+
+    it("should open circuit after consecutive failures reach threshold (default 3)", () => {
+      const limiter = new RateLimiter();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+      limiter.recordGeminiFailure(); // 3rd consecutive failure
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+    });
+
+    it("should accept custom failure threshold", () => {
+      const limiter = new RateLimiter({ geminiMaxConsecutiveFailures: 5 });
+      for (let i = 0; i < 4; i++) {
+        limiter.recordGeminiFailure();
+      }
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+      limiter.recordGeminiFailure(); // 5th
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+    });
+
+    it("should reset consecutive failure count on recordGeminiCall (success)", () => {
+      const limiter = new RateLimiter();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      // 2 consecutive failures, now a success resets
+      limiter.recordGeminiCall();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      // Only 2 consecutive again — should NOT open
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+    });
+
+    it("should auto-recover from failure circuit after cooldown period", () => {
+      const limiter = new RateLimiter({ geminiCircuitCooldownMs: 30_000 });
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // Advance 29s — still open
+      vi.advanceTimersByTime(29_000);
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // Advance 2 more — cooldown elapsed (total 31s > 30s)
+      vi.advanceTimersByTime(2_000);
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+    });
+
+    it("should include failure stats in getStats()", () => {
+      const limiter = new RateLimiter();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      const stats = limiter.getStats();
+      expect(stats.gemini_consecutive_failures).toBe(2);
+    });
+
+    it("should re-open circuit if failures resume after cooldown recovery", () => {
+      const limiter = new RateLimiter({
+        geminiCircuitCooldownMs: 10_000,
+      });
+      // Open circuit
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // Cooldown recovers
+      vi.advanceTimersByTime(11_000);
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+
+      // Failures resume — consecutive count was reset by cooldown recovery
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+    });
+
+    it("should keep circuit open if both budget AND failure trigger fire", () => {
+      const limiter = new RateLimiter({
+        geminiMaxCallsPerHour: 3,
+        geminiCircuitCooldownMs: 10_000,
+      });
+      // Budget-driven open
+      limiter.recordGeminiCall();
+      limiter.recordGeminiCall();
+      limiter.recordGeminiCall();
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // Failure cooldown elapsed, but budget still exhausted
+      vi.advanceTimersByTime(11_000);
+      // Budget check should still keep it open (hourly not expired)
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+    });
+  });
+
+  // =========================================================================
   // Edge Cases
   // =========================================================================
 
@@ -220,6 +325,74 @@ describe("RateLimiter", () => {
       for (let i = 0; i < 9; i++) {
         limiter.recordGeminiCall();
       }
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+    });
+  });
+
+  // =========================================================================
+  // [FIX H-3] resetDaily with ongoing failures
+  // =========================================================================
+
+  describe("resetDaily with ongoing failures (FIX H-3)", () => {
+    it("should keep circuit open if consecutive failures >= threshold after resetDaily", () => {
+      const limiter = new RateLimiter({
+        geminiMaxConsecutiveFailures: 3,
+        geminiMaxCallsPerDay: 10,
+      });
+
+      // 触发日预算耗尽
+      for (let i = 0; i < 10; i++) {
+        limiter.recordGeminiCall();
+      }
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // 同时触发连续失败
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+
+      // resetDaily 重置日计数，但连续失败仍达阈值 → 熔断器保持打开
+      limiter.resetDaily();
+      expect(limiter.getStats().gemini_calls_today).toBe(0);
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+    });
+
+    it("should close circuit on resetDaily when no ongoing failures", () => {
+      const limiter = new RateLimiter({
+        geminiMaxConsecutiveFailures: 3,
+        geminiMaxCallsPerDay: 5,
+      });
+
+      // 因日预算打开熔断器
+      for (let i = 0; i < 5; i++) {
+        limiter.recordGeminiCall();
+      }
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // 成功调用重置了失败计数（recordGeminiCall 内含 _consecutiveGeminiFailures = 0）
+      // resetDaily 时无连续失败 → 关闭熔断器
+      limiter.resetDaily();
+      expect(limiter.isGeminiCircuitOpen).toBe(false);
+    });
+
+    it("should keep circuit open if failures < threshold but still actively failing", () => {
+      const limiter = new RateLimiter({
+        geminiMaxConsecutiveFailures: 5,
+        geminiMaxCallsPerDay: 3,
+      });
+
+      // 日预算耗尽
+      for (let i = 0; i < 3; i++) {
+        limiter.recordGeminiCall();
+      }
+      expect(limiter.isGeminiCircuitOpen).toBe(true);
+
+      // 2 次连续失败（< 阈值 5）
+      limiter.recordGeminiFailure();
+      limiter.recordGeminiFailure();
+
+      // resetDaily → 连续失败 2 < 阈值 5 → 应该关闭熔断器
+      limiter.resetDaily();
       expect(limiter.isGeminiCircuitOpen).toBe(false);
     });
   });

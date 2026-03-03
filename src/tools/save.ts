@@ -268,7 +268,9 @@ export async function handleSave(
     }
 
     // 解构实际使用的向量和模型（降级时 model 会反映真实 Provider）
-    const { vector, model: embeddingModel } = embeddingResult;
+    // [FIX L-2]: 标准化模型名为小写，确保 search 过滤时一致性
+    const { vector, model: rawEmbeddingModel } = embeddingResult;
+    const embeddingModel = rawEmbeddingModel.toLowerCase();
 
     // [ADR 补充二十] 生成 BM25 稀疏向量（可选）
     const sparseVector = deps.bm25?.encode(cleanedContent);

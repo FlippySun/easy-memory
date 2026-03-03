@@ -7,7 +7,7 @@
  *   2. 数据管道工程师 — Qdrant 强一致性、多源异构向量的降维与对齐
  *   3. 混沌工程专家(QA) — 极端网络环境、类型破坏和边缘异常
  *
- * 链路 A (远端): Google gemini-embedding-001 API (MRL → 1024 维)
+ * 链路 A (远端): Google Cloud Vertex AI gemini-embedding-001 (MRL → 1024 维)
  * 链路 B (本地): Ollama bge-m3 (原生 1024 维)
  *
  * 验证目标:
@@ -21,7 +21,9 @@
  *   GEMINI_API_KEY=<your-key> pnpm test:e2e:dual
  *
  * 环境变量:
- *   GEMINI_API_KEY  — Google AI API Key (必须设置，否则跳过远端链路)
+ *   GEMINI_API_KEY  — Google Cloud API Key (必须设置，否则跳过远端链路)
+ *   GEMINI_PROJECT_ID — Google Cloud Project ID (远端链路必须)
+ *   GEMINI_REGION   — Google Cloud Region (default: us-central1)
  *   QDRANT_URL      — Qdrant 端点 (default: http://localhost:6333)
  *   QDRANT_API_KEY  — Qdrant API Key (default: easy-memory-dev)
  *   OLLAMA_URL      — Ollama 端点 (default: http://localhost:11434)
@@ -71,6 +73,8 @@ const RESOLVED_HOST = detectHost();
 const QDRANT_URL = process.env.QDRANT_URL ?? `http://${RESOLVED_HOST}:6333`;
 const QDRANT_API_KEY = process.env.QDRANT_API_KEY ?? "easy-memory-dev";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+const GEMINI_PROJECT_ID = process.env.GEMINI_PROJECT_ID ?? "";
+const GEMINI_REGION = process.env.GEMINI_REGION ?? "us-central1";
 const OLLAMA_URL = process.env.OLLAMA_URL ?? `http://${RESOLVED_HOST}:11434`;
 
 /**
@@ -282,26 +286,32 @@ class GeminiEmbeddingProvider implements EmbeddingProvider {
   readonly dimension: number;
   readonly timeoutMs: number;
   private readonly apiKey: string;
+  private readonly projectId: string;
+  private readonly region: string;
   private readonly maxRetries: number;
   private readonly activeControllers = new Set<AbortController>();
 
   constructor(
     apiKey: string,
+    projectId: string,
+    region = "us-central1",
     dimension = GEMINI_DIMENSION,
     timeoutMs = GEMINI_TIMEOUT_MS,
     maxRetries = MAX_RETRIES,
   ) {
     this.apiKey = apiKey;
+    this.projectId = projectId;
+    this.region = region;
     this.dimension = dimension;
     this.timeoutMs = timeoutMs;
     this.maxRetries = maxRetries;
   }
 
   async embed(text: string): Promise<number[]> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${this.apiKey}`;
+    const url = `https://${this.region}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/gemini-embedding-001:predict`;
     const body = {
-      content: { parts: [{ text }] },
-      outputDimensionality: this.dimension,
+      instances: [{ content: text }],
+      parameters: { outputDimensionality: this.dimension },
     };
 
     let lastError: Error | null = null;
@@ -323,7 +333,10 @@ class GeminiEmbeddingProvider implements EmbeddingProvider {
       try {
         const res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": this.apiKey,
+          },
           body: JSON.stringify(body),
           signal: controller.signal,
         });
@@ -345,13 +358,13 @@ class GeminiEmbeddingProvider implements EmbeddingProvider {
         }
 
         const data = (await res.json()) as {
-          embedding?: { values?: number[] };
+          predictions?: Array<{ embeddings?: { values?: number[] } }>;
         };
-        const values = data.embedding?.values;
+        const values = data.predictions?.[0]?.embeddings?.values;
 
         if (!Array.isArray(values) || values.length === 0) {
           throw new Error(
-            "Gemini response 结构异常: 缺少 embedding.values 数组",
+            "Vertex AI response 结构异常: 缺少 predictions[0].embeddings.values 数组",
           );
         }
 
@@ -382,18 +395,21 @@ class GeminiEmbeddingProvider implements EmbeddingProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    if (!this.apiKey) return false;
+    if (!this.apiKey || !this.projectId) return false;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     try {
-      // 最小化健康检查: embed 单个单词验证 API 连通性
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${this.apiKey}`;
+      // 最小化健康检查: embed 单个单词验证 Vertex AI API 连通性
+      const url = `https://${this.region}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/gemini-embedding-001:predict`;
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": this.apiKey,
+        },
         body: JSON.stringify({
-          content: { parts: [{ text: "ping" }] },
-          outputDimensionality: this.dimension,
+          instances: [{ content: "ping" }],
+          parameters: { outputDimensionality: this.dimension },
         }),
         signal: controller.signal,
       });
@@ -547,8 +563,12 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
 function createProvider(name: "gemini" | "ollama"): EmbeddingProvider | null {
   switch (name) {
     case "gemini":
-      if (!GEMINI_API_KEY) return null;
-      return new GeminiEmbeddingProvider(GEMINI_API_KEY);
+      if (!GEMINI_API_KEY || !GEMINI_PROJECT_ID) return null;
+      return new GeminiEmbeddingProvider(
+        GEMINI_API_KEY,
+        GEMINI_PROJECT_ID,
+        GEMINI_REGION,
+      );
     case "ollama":
       return new OllamaEmbeddingProvider();
     default:

@@ -359,6 +359,92 @@ describe("EmbeddingService (Unified Facade)", () => {
     });
   });
 
+  // ----- onFailure (失败回调 / 熔断器反馈) -----
+
+  describe("onFailure (failure feedback callback)", () => {
+    it("should call onFailure when a provider fails and fallback succeeds", async () => {
+      vi.mocked(primaryProvider.embed).mockRejectedValue(
+        new Error("Gemini 429"),
+      );
+      const onFailure = vi.fn();
+      const service = new EmbeddingService({
+        providers: [primaryProvider, fallbackProvider],
+        onFailure,
+      });
+
+      await service.embedWithMeta("test");
+      expect(onFailure).toHaveBeenCalledTimes(1);
+      expect(onFailure).toHaveBeenCalledWith({
+        provider: "gemini",
+        error: expect.any(Error),
+      });
+    });
+
+    it("should call onFailure for each failed provider", async () => {
+      vi.mocked(primaryProvider.embed).mockRejectedValue(
+        new Error("Gemini down"),
+      );
+      vi.mocked(fallbackProvider.embed).mockRejectedValue(
+        new Error("Ollama down"),
+      );
+      const onFailure = vi.fn();
+      const service = new EmbeddingService({
+        providers: [primaryProvider, fallbackProvider],
+        onFailure,
+      });
+
+      await expect(service.embedWithMeta("test")).rejects.toThrow(
+        "Ollama down",
+      );
+      expect(onFailure).toHaveBeenCalledTimes(2);
+      expect(onFailure).toHaveBeenCalledWith({
+        provider: "gemini",
+        error: expect.objectContaining({ message: "Gemini down" }),
+      });
+      expect(onFailure).toHaveBeenCalledWith({
+        provider: "ollama",
+        error: expect.objectContaining({ message: "Ollama down" }),
+      });
+    });
+
+    it("should NOT call onFailure when provider succeeds on first try", async () => {
+      const onFailure = vi.fn();
+      const service = new EmbeddingService({
+        providers: [primaryProvider],
+        onFailure,
+      });
+
+      await service.embedWithMeta("test");
+      expect(onFailure).not.toHaveBeenCalled();
+    });
+
+    it("should not break when onFailure callback throws", async () => {
+      vi.mocked(primaryProvider.embed).mockRejectedValue(
+        new Error("Gemini fail"),
+      );
+      const onFailure = vi.fn().mockImplementation(() => {
+        throw new Error("callback crash");
+      });
+      const service = new EmbeddingService({
+        providers: [primaryProvider, fallbackProvider],
+        onFailure,
+      });
+
+      // Should still successfully fallback despite onFailure crash
+      const result = await service.embedWithMeta("test");
+      expect(result.provider).toBe("ollama");
+    });
+
+    it("should not break when onFailure is not provided", async () => {
+      vi.mocked(primaryProvider.embed).mockRejectedValue(new Error("fail"));
+      const service = new EmbeddingService({
+        providers: [primaryProvider, fallbackProvider],
+      });
+      const result = await service.embedWithMeta("test");
+      expect(result.provider).toBe("ollama");
+    });
+  });
+
   // ----- onSuccess (成功回调 / 成本追踪) -----
 
   describe("onSuccess (cost tracking callback)", () => {

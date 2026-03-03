@@ -22,6 +22,7 @@ export {
   OllamaEmbeddingProvider,
   GeminiEmbeddingProvider,
   validateVector,
+  NonRetryableError,
   type OllamaProviderConfig,
   type GeminiProviderConfig,
 } from "./embedding-providers.js";
@@ -44,6 +45,16 @@ export interface EmbeddingResult {
 }
 
 /**
+ * Provider 失败信息 — 用于 onFailure 回调。
+ */
+export interface EmbeddingFailure {
+  /** 失败的 Provider 标识 (e.g. "gemini") */
+  provider: string;
+  /** 失败原因 */
+  error: Error;
+}
+
+/**
  * EmbeddingService 配置。
  */
 export interface EmbeddingServiceConfig {
@@ -61,6 +72,11 @@ export interface EmbeddingServiceConfig {
    * 通过 result.provider 判断实际使用的 Provider 并记录计费。
    */
   onSuccess?: (result: EmbeddingResult) => void;
+  /**
+   * Provider 失败回调 — 在 Provider embed 失败后调用。
+   * 用于失败驱动熔断: 连续失败时快速打开熔断器，避免每次都等待重试。
+   */
+  onFailure?: (failure: EmbeddingFailure) => void;
 }
 
 // =========================================================================
@@ -83,6 +99,7 @@ export class EmbeddingService {
     | ((provider: EmbeddingProvider) => boolean)
     | undefined;
   private readonly onSuccess: ((result: EmbeddingResult) => void) | undefined;
+  private readonly onFailure: ((failure: EmbeddingFailure) => void) | undefined;
 
   constructor(config: EmbeddingServiceConfig) {
     if (!config.providers || config.providers.length === 0) {
@@ -93,6 +110,7 @@ export class EmbeddingService {
       config.fallbackEnabled ?? config.providers.length > 1;
     this.shouldUseProvider = config.shouldUseProvider;
     this.onSuccess = config.onSuccess;
+    this.onFailure = config.onFailure;
   }
 
   /**
@@ -170,6 +188,15 @@ export class EmbeddingService {
           error: lastError.message,
           willFallback: this.fallbackEnabled && !isLastProvider,
         });
+
+        // 通知失败回调（熔断器反馈）— 回调异常不应影响降级流程
+        try {
+          this.onFailure?.({ provider: provider.name, error: lastError });
+        } catch (cbErr: unknown) {
+          log.warn("onFailure callback failed (fallback continues)", {
+            error: cbErr instanceof Error ? cbErr.message : String(cbErr),
+          });
+        }
 
         // 不降级或已是最后一个 → 直接抛出
         if (!this.fallbackEnabled || isLastProvider) {

@@ -91,6 +91,28 @@ export async function handleSearch(
     match: { any: allowedLifecycles },
   });
 
+  // [FIX C-2]: 默认过滤同模型向量，防止跨模型向量空间污染
+  // auto 模式下 Gemini 和 Ollama 的 1024 维向量处于不同语义空间，
+  // 跨模型 cosine similarity 无意义。仅在 cross_model=true 时跳过过滤。
+  // [FIX L-2]: 使用标准化（小写）模型名进行比较
+  const normalizedQueryModel = queryModel.toLowerCase();
+  if (!input.cross_model) {
+    mustConditions.push({
+      should: [
+        {
+          key: "embedding_model",
+          match: { value: normalizedQueryModel },
+        },
+        { is_empty: { key: "embedding_model" } },
+        // [FIX F-2]: 兼容 schema default 为 "unknown" 的旧记忆
+        {
+          key: "embedding_model",
+          match: { value: "unknown" },
+        },
+      ],
+    });
+  }
+
   if (input.tags && input.tags.length > 0) {
     for (const tag of input.tags) {
       mustConditions.push({
@@ -149,14 +171,17 @@ export async function handleSearch(
   });
 
   // D-AUDIT: 跨模型向量混合检测 — auto 模式降级时 Gemini/Ollama 向量不在同一语义空间
+  // [FIX F-4]: 使用标准化模型名比较，避免大小写不一致导致虚假警告
   const mismatchedCount = results.filter(
     (r) =>
-      r.payload.embedding_model && r.payload.embedding_model !== queryModel,
+      r.payload.embedding_model &&
+      String(r.payload.embedding_model).toLowerCase() !==
+        normalizedQueryModel,
   ).length;
 
   let systemNote = SYSTEM_NOTE;
   if (mismatchedCount > 0) {
-    systemNote += ` ⚠️ 警告：${mismatchedCount}/${results.length} 条记忆使用了不同的向量模型（查询模型: ${queryModel}），相似度分数可能不准确。`;
+    systemNote += ` ⚠️ 警告：${mismatchedCount}/${results.length} 条记忆使用了不同的向量模型（查询模型: ${normalizedQueryModel}），相似度分数可能不准确。`;
   }
 
   return {

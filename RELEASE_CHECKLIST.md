@@ -12,14 +12,15 @@
 
 ## 总览
 
-| # | 板块 | 状态 | 备注 |
-|---|------|------|------|
-| 1 | [npm 发布](#1-npm-发布) | ✅ | `easy-memory@0.1.0` 已发布到 npmjs.org |
-| 2 | [Docker 化](#2-docker-化) | ✅ | 多平台镜像 (amd64+arm64) 已推送 Docker Hub |
-| 3 | [CI/CD](#3-cicd-github-actions) | ✅ | 3 个 workflow 已配置，CI 绿色通过 |
-| 4 | [VPS 部署](#4-vps-部署) | ✅ | `memory.zhiz.chat` HTTPS 运行中，Gemini+Ollama 双引擎 |
-| 5 | [README 完善](#5-readme-完善) | ✅ | 完整重写，含 API 文档、环境变量参考 |
-| 6 | [E2E 真实环境测试](#6-e2e-真实环境测试) | ✅ | 404 单元测试 + E2E 全绿 |
+| #   | 板块                                    | 状态 | 备注                                                  |
+| --- | --------------------------------------- | ---- | ----------------------------------------------------- |
+| 1   | [npm 发布](#1-npm-发布)                 | ✅   | `easy-memory@0.1.0` 已发布到 npmjs.org                |
+| 2   | [Docker 化](#2-docker-化)               | ✅   | 多平台镜像 (amd64+arm64) 已推送 Docker Hub            |
+| 3   | [CI/CD](#3-cicd-github-actions)         | ✅   | 3 个 workflow 已配置，CI 绿色通过                     |
+| 4   | [VPS 部署](#4-vps-部署)                 | ✅   | `memory.zhiz.chat` HTTPS 运行中，Gemini+Ollama 双引擎 |
+| 5   | [README 完善](#5-readme-完善)           | ✅   | 完整重写，含 API 文档、环境变量参考                   |
+| 6   | [E2E 真实环境测试](#6-e2e-真实环境测试) | ✅   | 404 单元测试 + E2E 全绿                               |
+| 7   | [Breaking Changes](#7-️-breaking-changes-记录-v020) | ✅ | Vertex AI 迁移 GEMINI_PROJECT_ID 必填 |
 
 ---
 
@@ -29,44 +30,44 @@
 
 ### 1.1 package.json 配置
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `name` — 确认 npm 包名可用 (`easy-memory`) | ✅ | 名称可用，已发布 |
-| `version` — 设为 `0.1.0` 首个公开版本 | ✅ | |
-| `bin` — 添加 `"easy-memory": "dist/index.js"` | ✅ | |
-| `files` — 白名单发布文件 | ✅ | `["dist/", "README.md", "LICENSE"]` |
-| `publishConfig` — 设置 `"access": "public"` | ✅ | |
-| `keywords` — 添加 SEO 关键词 | ✅ | `mcp`, `memory`, `ai`, `qdrant`, `ollama`, `vector-search` |
-| `repository` / `homepage` / `bugs` — 填写 GitHub 链接 | ✅ | |
-| `author` / `license` — 确认 MIT | ✅ | |
-| `engines` — 确认 `"node": ">=20"` | ✅ | |
+| 条目                                                  | 状态 | 说明                                                       |
+| ----------------------------------------------------- | ---- | ---------------------------------------------------------- |
+| `name` — 确认 npm 包名可用 (`easy-memory`)            | ✅   | 名称可用，已发布                                           |
+| `version` — 设为 `0.1.0` 首个公开版本                 | ✅   |                                                            |
+| `bin` — 添加 `"easy-memory": "dist/index.js"`         | ✅   |                                                            |
+| `files` — 白名单发布文件                              | ✅   | `["dist/", "README.md", "LICENSE"]`                        |
+| `publishConfig` — 设置 `"access": "public"`           | ✅   |                                                            |
+| `keywords` — 添加 SEO 关键词                          | ✅   | `mcp`, `memory`, `ai`, `qdrant`, `ollama`, `vector-search` |
+| `repository` / `homepage` / `bugs` — 填写 GitHub 链接 | ✅   |                                                            |
+| `author` / `license` — 确认 MIT                       | ✅   |                                                            |
+| `engines` — 确认 `"node": ">=20"`                     | ✅   |                                                            |
 
 ### 1.2 构建产物准备
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `dist/index.js` 头部添加 shebang (`#!/usr/bin/env node`) | ✅ | src/index.ts 首行 shebang，tsc 保留 |
-| `.npmignore` 或 `files` 白名单确保只发布必要文件 | ✅ | 使用 `files` 白名单 |
-| `pnpm build` 构建无错误 | ✅ | |
-| `tsc --noEmit` 类型检查通过 | ✅ | |
+| 条目                                                     | 状态 | 说明                                |
+| -------------------------------------------------------- | ---- | ----------------------------------- |
+| `dist/index.js` 头部添加 shebang (`#!/usr/bin/env node`) | ✅   | src/index.ts 首行 shebang，tsc 保留 |
+| `.npmignore` 或 `files` 白名单确保只发布必要文件         | ✅   | 使用 `files` 白名单                 |
+| `pnpm build` 构建无错误                                  | ✅   |                                     |
+| `tsc --noEmit` 类型检查通过                              | ✅   |                                     |
 
 ### 1.3 npm 认证与发布
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `.npmrc` 配置 auth token | ✅ | |
-| `npm whoami` 验证认证成功 | ✅ | 用户: thj8632 |
-| `npm publish --dry-run` 预检 | ✅ | |
-| `npm publish` 正式发布 | ✅ | easy-memory@0.1.0 |
-| `npx easy-memory --help` 验证安装后可用 | ✅ | |
+| 条目                                    | 状态 | 说明              |
+| --------------------------------------- | ---- | ----------------- |
+| `.npmrc` 配置 auth token                | ✅   |                   |
+| `npm whoami` 验证认证成功               | ✅   | 用户: thj8632     |
+| `npm publish --dry-run` 预检            | ✅   |                   |
+| `npm publish` 正式发布                  | ✅   | easy-memory@0.1.0 |
+| `npx easy-memory --help` 验证安装后可用 | ✅   |                   |
 
 ### 1.4 发布后验证
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| npmjs.com 页面检查包信息 | ✅ | https://www.npmjs.com/package/easy-memory |
-| 全新目录下 `npx easy-memory` 冒烟测试 | ✅ | |
-| Claude Desktop / Cursor 配置 npx 方式验证 MCP 连通 | ✅ | README 已含配置示例 |
+| 条目                                               | 状态 | 说明                                      |
+| -------------------------------------------------- | ---- | ----------------------------------------- |
+| npmjs.com 页面检查包信息                           | ✅   | https://www.npmjs.com/package/easy-memory |
+| 全新目录下 `npx easy-memory` 冒烟测试              | ✅   |                                           |
+| Claude Desktop / Cursor 配置 npx 方式验证 MCP 连通 | ✅   | README 已含配置示例                       |
 
 ---
 
@@ -76,44 +77,44 @@
 
 ### 2.1 Dockerfile
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 多阶段构建 (builder → production) | ✅ | |
-| 基础镜像 `node:20-alpine` | ✅ | |
-| 非 root 用户运行 (`node` 用户) | ✅ | |
-| `pnpm install --prod` 只安装生产依赖 | ✅ | |
-| 健康检查 (`HEALTHCHECK`) | ✅ | HTTP `/health` 端点 |
-| `.dockerignore` 排除不必要文件 | ✅ | |
-| 镜像构建测试通过 | ✅ | |
+| 条目                                 | 状态 | 说明                |
+| ------------------------------------ | ---- | ------------------- |
+| 多阶段构建 (builder → production)    | ✅   |                     |
+| 基础镜像 `node:20-alpine`            | ✅   |                     |
+| 非 root 用户运行 (`node` 用户)       | ✅   |                     |
+| `pnpm install --prod` 只安装生产依赖 | ✅   |                     |
+| 健康检查 (`HEALTHCHECK`)             | ✅   | HTTP `/health` 端点 |
+| `.dockerignore` 排除不必要文件       | ✅   |                     |
+| 镜像构建测试通过                     | ✅   |                     |
 
 ### 2.2 docker-compose.yml (开发环境)
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| easy-memory 服务定义 | ✅ | |
-| qdrant 服务 | ✅ | bash /dev/tcp 健康检查 + 数据卷 |
-| ollama 服务 | ✅ | bash /dev/tcp 健康检查 + 模型卷 |
-| 内部网络 (`easy-memory-internal`) | ✅ | |
-| `.env.example` 环境变量模板 | ✅ | |
-| `docker compose up -d` 启动验证 | ✅ | 含 `ollama-init` 自动拉取模型 |
+| 条目                              | 状态 | 说明                            |
+| --------------------------------- | ---- | ------------------------------- |
+| easy-memory 服务定义              | ✅   |                                 |
+| qdrant 服务                       | ✅   | bash /dev/tcp 健康检查 + 数据卷 |
+| ollama 服务                       | ✅   | bash /dev/tcp 健康检查 + 模型卷 |
+| 内部网络 (`easy-memory-internal`) | ✅   |                                 |
+| `.env.example` 环境变量模板       | ✅   |                                 |
+| `docker compose up -d` 启动验证   | ✅   | 含 `ollama-init` 自动拉取模型   |
 
 ### 2.3 docker-compose.prod.yml (生产覆盖)
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `restart: always` 自动重启 | ✅ | |
-| Qdrant 端口取消外部映射 | ✅ | 仅内网可达 |
-| 网络标记 `internal: true` | ✅ | |
-| 多阶段构建 `target: production` | ✅ | |
+| 条目                            | 状态 | 说明       |
+| ------------------------------- | ---- | ---------- |
+| `restart: always` 自动重启      | ✅   |            |
+| Qdrant 端口取消外部映射         | ✅   | 仅内网可达 |
+| 网络标记 `internal: true`       | ✅   |            |
+| 多阶段构建 `target: production` | ✅   |            |
 
 ### 2.4 Docker Hub 发布
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| Docker Hub 登录 | ✅ | 用户: thj8632 |
-| 镜像标签策略 (`latest` + SemVer tag) | ✅ | `thj8632/easy-memory:0.1.0` + `:latest` |
-| `docker push` 推送镜像 | ✅ | 多平台 amd64 + arm64 |
-| `docker pull` 拉取验证 | ✅ | VPS 成功拉取 |
+| 条目                                 | 状态 | 说明                                    |
+| ------------------------------------ | ---- | --------------------------------------- |
+| Docker Hub 登录                      | ✅   | 用户: thj8632                           |
+| 镜像标签策略 (`latest` + SemVer tag) | ✅   | `thj8632/easy-memory:0.1.0` + `:latest` |
+| `docker push` 推送镜像               | ✅   | 多平台 amd64 + arm64                    |
+| `docker pull` 拉取验证               | ✅   | VPS 成功拉取                            |
 
 ---
 
@@ -123,40 +124,40 @@
 
 ### 3.1 CI 流水线 (`.github/workflows/ci.yml`)
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 触发条件: `push` (main) + `pull_request` | ✅ | |
-| Job: `lint-and-type-check` — `tsc --noEmit` | ✅ | |
-| Job: `unit-test` — `pnpm test` | ✅ | 404 tests pass |
-| 缓存 pnpm store (`actions/cache`) | ✅ | |
-| 构建验证 — `pnpm build` | ✅ | |
-| 状态徽章添加到 README | ✅ | |
+| 条目                                        | 状态 | 说明           |
+| ------------------------------------------- | ---- | -------------- |
+| 触发条件: `push` (main) + `pull_request`    | ✅   |                |
+| Job: `lint-and-type-check` — `tsc --noEmit` | ✅   |                |
+| Job: `unit-test` — `pnpm test`              | ✅   | 404 tests pass |
+| 缓存 pnpm store (`actions/cache`)           | ✅   |                |
+| 构建验证 — `pnpm build`                     | ✅   |                |
+| 状态徽章添加到 README                       | ✅   |                |
 
 ### 3.2 npm 自动发布 (`.github/workflows/publish-npm.yml`)
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 触发条件: `push tags: v*` | ✅ | |
-| GitHub Secret: `NPM_TOKEN` | ✅ | 已通过 gh secret set 配置 |
-| 发布步骤: build → publish | ✅ | |
-| 发布后自动创建 GitHub Release | ✅ | |
+| 条目                          | 状态 | 说明                      |
+| ----------------------------- | ---- | ------------------------- |
+| 触发条件: `push tags: v*`     | ✅   |                           |
+| GitHub Secret: `NPM_TOKEN`    | ✅   | 已通过 gh secret set 配置 |
+| 发布步骤: build → publish     | ✅   |                           |
+| 发布后自动创建 GitHub Release | ✅   |                           |
 
 ### 3.3 Docker 自动发布 (`.github/workflows/publish-docker.yml`)
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 触发条件: `push tags: v*` | ✅ | |
-| GitHub Secrets: `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | ✅ | 已通过 gh secret set 配置 |
-| 多平台构建 (`linux/amd64`, `linux/arm64`) | ✅ | QEMU + buildx |
-| 推送到 Docker Hub (`thj8632/easy-memory`) | ✅ | |
-| 标签: `latest` + `v0.1.0` | ✅ | |
+| 条目                                                     | 状态 | 说明                      |
+| -------------------------------------------------------- | ---- | ------------------------- |
+| 触发条件: `push tags: v*`                                | ✅   |                           |
+| GitHub Secrets: `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | ✅   | 已通过 gh secret set 配置 |
+| 多平台构建 (`linux/amd64`, `linux/arm64`)                | ✅   | QEMU + buildx             |
+| 推送到 Docker Hub (`thj8632/easy-memory`)                | ✅   |                           |
+| 标签: `latest` + `v0.1.0`                                | ✅   |                           |
 
 ### 3.4 GitHub Repository 配置
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| Repo Secrets 配置 (`NPM_TOKEN`, `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`) | ✅ | |
-| Branch protection rules (main) | ⏭️ | 个人项目暂不需要 |
+| 条目                                                                     | 状态 | 说明             |
+| ------------------------------------------------------------------------ | ---- | ---------------- |
+| Repo Secrets 配置 (`NPM_TOKEN`, `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`) | ✅   |                  |
+| Branch protection rules (main)                                           | ⏭️   | 个人项目暂不需要 |
 
 ---
 
@@ -167,47 +168,48 @@
 
 ### 4.1 VPS 环境准备
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| SSH 连接验证 | ✅ | `root@zhiz.chat:22` (域名直连) |
-| Docker + Docker Compose 安装/更新 | ✅ | Docker 29.2.1, Compose v5.0.2 |
-| Nginx 反向代理 (宝塔) | ✅ | `memory.zhiz.chat` → `127.0.0.1:3080` |
-| 域名 DNS 解析配置 | ✅ | `*.zhiz.chat` → VPS IP (通配符) |
-| SSL/TLS 证书 | ✅ | Let's Encrypt 通配符 `*.zhiz.chat` (自动续签) |
-| 防火墙配置 | ✅ | 80/443 开放，3080 仅本机可达 |
+| 条目                              | 状态 | 说明                                          |
+| --------------------------------- | ---- | --------------------------------------------- |
+| SSH 连接验证                      | ✅   | `root@zhiz.chat:22` (域名直连)                |
+| Docker + Docker Compose 安装/更新 | ✅   | Docker 29.2.1, Compose v5.0.2                 |
+| Nginx 反向代理 (宝塔)             | ✅   | `memory.zhiz.chat` → `127.0.0.1:3080`         |
+| 域名 DNS 解析配置                 | ✅   | `*.zhiz.chat` → VPS IP (通配符)               |
+| SSL/TLS 证书                      | ✅   | Let's Encrypt 通配符 `*.zhiz.chat` (自动续签) |
+| 防火墙配置                        | ✅   | 80/443 开放，3080 仅本机可达                  |
 
 ### 4.2 部署文件准备
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 生产环境 `.env` 配置文件 | ✅ | `/opt/easy-memory/.env` |
-| `docker-compose.yml` 适配 VPS | ✅ | 含 `ollama-init` 自动拉取模型 |
-| Nginx 反向代理配置 | ✅ | `/www/server/panel/vhost/nginx/memory.zhiz.chat.conf` |
+| 条目                          | 状态 | 说明                                                  |
+| ----------------------------- | ---- | ----------------------------------------------------- |
+| 生产环境 `.env` 配置文件      | ✅   | `/opt/easy-memory/.env`                               |
+| `docker-compose.yml` 适配 VPS | ✅   | 含 `ollama-init` 自动拉取模型                         |
+| Nginx 反向代理配置            | ✅   | `/www/server/panel/vhost/nginx/memory.zhiz.chat.conf` |
 
 ### 4.3 反向代理配置
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| Nginx vhost 创建 | ✅ | `memory.zhiz.chat` → `proxy_pass 127.0.0.1:3080` |
-| SSL 证书挂载 | ✅ | 复用 `*.zhiz.chat` 通配符证书 |
-| HSTS 头 | ✅ | `Strict-Transport-Security: max-age=31536000` |
-| X-Forwarded-* 头透传 | ✅ | `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` |
-| 端口安全 | ✅ | Docker 端口 `127.0.0.1:3080` 仅本机可达 |
-| `TRUST_PROXY=true` | ✅ | 信任反代头 |
-| `REQUIRE_TLS=true` | ✅ | 拒绝非 HTTPS 请求 |
+| 条目                  | 状态 | 说明                                                |
+| --------------------- | ---- | --------------------------------------------------- |
+| Nginx vhost 创建      | ✅   | `memory.zhiz.chat` → `proxy_pass 127.0.0.1:3080`    |
+| SSL 证书挂载          | ✅   | 复用 `*.zhiz.chat` 通配符证书                       |
+| HSTS 头               | ✅   | `Strict-Transport-Security: max-age=31536000`       |
+| X-Forwarded-\* 头透传 | ✅   | `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` |
+| 端口安全              | ✅   | Docker 端口 `127.0.0.1:3080` 仅本机可达             |
+| `TRUST_PROXY=true`    | ✅   | 信任反代头                                          |
+| `REQUIRE_TLS=true`    | ✅   | 拒绝非 HTTPS 请求                                   |
 
 ### 4.4 Gemini 远端向量引擎部署
 
 > **⚠️ 重要**: VPS 作为公共服务，**必须**启用 Gemini 双引擎模式。
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `GEMINI_API_KEY` 配置 | ✅ | 从 `secrets.json → google_aistudio.api_key` 读取并写入 VPS `.env` |
-| `EMBEDDING_PROVIDER=auto` | ✅ | Gemini 优先，Ollama 自动兜底 |
-| 断路器验证 | ✅ | Gemini 429 限流 → 自动降级 Ollama → 请求成功 |
-| 日志确认双引擎工作 | ✅ | 日志可见 `Fallback to ollama succeeded` |
+| 条目                      | 状态 | 说明                                                              |
+| ------------------------- | ---- | ----------------------------------------------------------------- |
+| `GEMINI_API_KEY` 配置     | ✅   | 从 `secrets.json → google_aistudio.api_key` 读取并写入 VPS `.env` |
+| `EMBEDDING_PROVIDER=auto` | ✅   | Gemini 优先，Ollama 自动兜底                                      |
+| 断路器验证                | ✅   | Gemini 429 限流 → 自动降级 Ollama → 请求成功                      |
+| 日志确认双引擎工作        | ✅   | 日志可见 `Fallback to ollama succeeded`                           |
 
 **部署 Gemini 到 VPS 的步骤**:
+
 1. 从 `secrets.json` 读取 `google_aistudio.api_key`
 2. SSH 到 VPS: `ssh root@zhiz.chat`
 3. 编辑 `/opt/easy-memory/.env`:
@@ -220,23 +222,23 @@
 
 ### 4.5 部署执行
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 上传项目文件到 VPS | ✅ | scp 上传 compose 文件 |
-| 拉取 bge-m3 模型 | ✅ | `ollama-init` 容器自动拉取 |
-| `docker compose up -d` 启动服务 | ✅ | 4 容器全部 healthy |
-| 健康检查验证 | ✅ | `curl https://memory.zhiz.chat/health` → `{"status":"ok"}` |
+| 条目                            | 状态 | 说明                                                       |
+| ------------------------------- | ---- | ---------------------------------------------------------- |
+| 上传项目文件到 VPS              | ✅   | scp 上传 compose 文件                                      |
+| 拉取 bge-m3 模型                | ✅   | `ollama-init` 容器自动拉取                                 |
+| `docker compose up -d` 启动服务 | ✅   | 4 容器全部 healthy                                         |
+| 健康检查验证                    | ✅   | `curl https://memory.zhiz.chat/health` → `{"status":"ok"}` |
 
 ### 4.6 部署后验证
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| HTTP API `save` → `search` → `forget` 闭环测试 | ✅ | HTTPS 域名 E2E 验证通过 |
-| Bearer Token 鉴权验证 | ✅ | |
-| TLS 证书验证 | ✅ | Let's Encrypt 通配符，HSTS |
-| 日志输出正常 | ✅ | |
-| 进程重启恢复 | ✅ | restart: always |
-| Gemini 双引擎验证 | ✅ | auto 模式：Gemini → Ollama 降级正常 |
+| 条目                                           | 状态 | 说明                                |
+| ---------------------------------------------- | ---- | ----------------------------------- |
+| HTTP API `save` → `search` → `forget` 闭环测试 | ✅   | HTTPS 域名 E2E 验证通过             |
+| Bearer Token 鉴权验证                          | ✅   |                                     |
+| TLS 证书验证                                   | ✅   | Let's Encrypt 通配符，HSTS          |
+| 日志输出正常                                   | ✅   |                                     |
+| 进程重启恢复                                   | ✅   | restart: always                     |
+| Gemini 双引擎验证                              | ✅   | auto 模式：Gemini → Ollama 降级正常 |
 
 ---
 
@@ -246,49 +248,67 @@
 
 ### 5.1 结构优化
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 项目 Badge (CI, npm version, Docker, License) | ✅ | 4 个徽章 |
-| 一句话介绍 + 特性亮点列表 | ✅ | 双 Shell 架构说明 |
-| 架构图 / 工作流图 (Mermaid) | ⏭️ | 用项目结构树替代 |
+| 条目                                          | 状态 | 说明              |
+| --------------------------------------------- | ---- | ----------------- |
+| 项目 Badge (CI, npm version, Docker, License) | ✅   | 4 个徽章          |
+| 一句话介绍 + 特性亮点列表                     | ✅   | 双 Shell 架构说明 |
+| 架构图 / 工作流图 (Mermaid)                   | ⏭️   | 用项目结构树替代  |
 
 ### 5.2 安装指南
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 方式一: `npx easy-memory`（最简单） | ✅ | |
-| 方式二: Docker Compose（一键全栈） | ✅ | |
-| 方式三: 从源码构建 | ✅ | |
+| 条目                                | 状态 | 说明 |
+| ----------------------------------- | ---- | ---- |
+| 方式一: `npx easy-memory`（最简单） | ✅   |      |
+| 方式二: Docker Compose（一键全栈）  | ✅   |      |
+| 方式三: 从源码构建                  | ✅   |      |
 
 ### 5.3 客户端配置示例
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| Claude Desktop `claude_desktop_config.json` 配置 | ✅ | |
-| Cursor MCP 配置 | ✅ | |
-| VS Code Copilot MCP 配置 | ✅ | |
-| HTTP API 使用示例 (curl) | ✅ | 每个端点都有 curl 示例 |
+| 条目                                             | 状态 | 说明                   |
+| ------------------------------------------------ | ---- | ---------------------- |
+| Claude Desktop `claude_desktop_config.json` 配置 | ✅   |                        |
+| Cursor MCP 配置                                  | ✅   |                        |
+| VS Code Copilot MCP 配置                         | ✅   |                        |
+| HTTP API 使用示例 (curl)                         | ✅   | 每个端点都有 curl 示例 |
 
 ### 5.4 API 文档
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| MCP Tools 列表 + 参数说明 | ✅ | 4 个 Tool 表格 |
-| HTTP API 端点文档 | ✅ | 5 个端点完整字段说明 |
+| 条目                      | 状态 | 说明                 |
+| ------------------------- | ---- | -------------------- |
+| MCP Tools 列表 + 参数说明 | ✅   | 4 个 Tool 表格       |
+| HTTP API 端点文档         | ✅   | 5 个端点完整字段说明 |
 
 ### 5.5 环境变量参考
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 完整环境变量表（名称、默认值、说明） | ✅ | 18 个变量 |
+| 条目                                 | 状态 | 说明      |
+| ------------------------------------ | ---- | --------- |
+| 完整环境变量表（名称、默认值、说明） | ✅   | 18 个变量 |
 
 ### 5.6 其他
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| LICENSE 文件 | ✅ | MIT |
-| CHANGELOG.md | ⏭️ | 首版暂不需要 |
-| Contributing 指南 | ⏭️ | 个人项目暂不需要 |
+| 条目              | 状态 | 说明             |
+| ----------------- | ---- | ---------------- |
+| LICENSE 文件      | ✅   | MIT              |
+| CHANGELOG.md      | ⏭️   | 首版暂不需要     |
+| Contributing 指南 | ⏭️   | 个人项目暂不需要 |
+
+---
+
+## 7. ⚠️ Breaking Changes 记录 (v0.2.0+)
+
+> 目标: 记录所有向后不兼容的配置/API 变更，确保用户升级时不会因缺少信息而导致服务中断。
+
+### 7.1 Vertex AI 迁移 — `GEMINI_PROJECT_ID` 新增必填
+
+| 条目 | 说明 |
+| ---- | ---- |
+| **影响版本** | v0.2.0+ |
+| **影响范围** | `EMBEDDING_PROVIDER=gemini` 或 `auto` 的所有部署 |
+| **变更原因** | Gemini Embedding 从 Generative Language API 迁移至 Vertex AI（更好的区域控制、配额管理、MRL 支持） |
+| **破坏性表现** | 缺少 `GEMINI_PROJECT_ID` 时服务启动立即抛出异常 → **crash** |
+| **修复方式** | 新增环境变量 `GEMINI_PROJECT_ID=<your-gcp-project-id>` |
+| **Ollama 用户** | **不受影响**（`EMBEDDING_PROVIDER=ollama` 为默认值） |
+| **README 同步** | ✅ 已在 README.md 新增 Breaking Changes 章节 |
 
 ---
 
@@ -298,38 +318,38 @@
 
 ### 6.1 前置条件
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| 本地 Qdrant 运行中 | ✅ | Docker 容器 |
-| 本地 Ollama 运行中 | ✅ | bge-m3 已加载 |
-| 构建产物最新 | ✅ | |
+| 条目               | 状态 | 说明          |
+| ------------------ | ---- | ------------- |
+| 本地 Qdrant 运行中 | ✅   | Docker 容器   |
+| 本地 Ollama 运行中 | ✅   | bge-m3 已加载 |
+| 构建产物最新       | ✅   |               |
 
 ### 6.2 MCP 模式 E2E
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `memory_save` — 写入一条记忆 | ✅ | |
-| `memory_search` — 语义检索召回 | ✅ | |
-| `memory_forget` — 软删除（archived） | ✅ | |
-| `memory_search` — 再次检索验证已遗忘 | ✅ | |
-| `memory_status` — 健康检查 | ✅ | |
+| 条目                                 | 状态 | 说明 |
+| ------------------------------------ | ---- | ---- |
+| `memory_save` — 写入一条记忆         | ✅   |      |
+| `memory_search` — 语义检索召回       | ✅   |      |
+| `memory_forget` — 软删除（archived） | ✅   |      |
+| `memory_search` — 再次检索验证已遗忘 | ✅   |      |
+| `memory_status` — 健康检查           | ✅   |      |
 
 ### 6.3 HTTP 模式 E2E
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| `POST /api/save` — 写入 | ✅ | |
-| `POST /api/search` — 检索 | ✅ | |
-| `POST /api/forget` — 遗忘 | ✅ | |
-| `GET /api/status` — 状态 | ✅ | |
-| Bearer Token 鉴权测试 | ✅ | |
+| 条目                      | 状态 | 说明 |
+| ------------------------- | ---- | ---- |
+| `POST /api/save` — 写入   | ✅   |      |
+| `POST /api/search` — 检索 | ✅   |      |
+| `POST /api/forget` — 遗忘 | ✅   |      |
+| `GET /api/status` — 状态  | ✅   |      |
+| Bearer Token 鉴权测试     | ✅   |      |
 
 ### 6.4 跨模式一致性
 
-| 条目 | 状态 | 说明 |
-|------|------|------|
-| MCP `save` 的记忆 → HTTP `search` 可召回 | ✅ | 数据层共享 Qdrant |
-| 相同输入两种模式返回结构一致 | ✅ | |
+| 条目                                     | 状态 | 说明              |
+| ---------------------------------------- | ---- | ----------------- |
+| MCP `save` 的记忆 → HTTP `search` 可召回 | ✅   | 数据层共享 Qdrant |
+| 相同输入两种模式返回结构一致             | ✅   |                   |
 
 ---
 
@@ -337,13 +357,13 @@
 
 > 所有敏感凭证从 `secrets.json` 读取，**绝对禁止硬编码**。
 
-| 用途 | secrets.json 路径 | 目标 |
-|------|-------------------|------|
-| npm 发布 | `npm.token` | `.npmrc` / GitHub Secret `NPM_TOKEN` |
-| Docker Hub | `docker.user_name` + `docker.token` | GitHub Secrets `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` |
-| GitHub Actions | `github.pat_token` | Repo Secrets（如需强权限操作） |
-| VPS SSH | `vps.host` + `vps.ssh_port` + `vps.ssh_private_key` | `ssh root@zhiz.chat` 或 `ssh root@<VPS IP>` |
-| Gemini API | `google_aistudio.api_key` | VPS `.env` 中的 `GEMINI_API_KEY` |
+| 用途           | secrets.json 路径                                   | 目标                                                    |
+| -------------- | --------------------------------------------------- | ------------------------------------------------------- |
+| npm 发布       | `npm.token`                                         | `.npmrc` / GitHub Secret `NPM_TOKEN`                    |
+| Docker Hub     | `docker.user_name` + `docker.token`                 | GitHub Secrets `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` |
+| GitHub Actions | `github.pat_token`                                  | Repo Secrets（如需强权限操作）                          |
+| VPS SSH        | `vps.host` + `vps.ssh_port` + `vps.ssh_private_key` | `ssh root@zhiz.chat` 或 `ssh root@<VPS IP>`             |
+| Gemini API     | `google_aistudio.api_key`                           | VPS `.env` 中的 `GEMINI_API_KEY`                        |
 
 ---
 

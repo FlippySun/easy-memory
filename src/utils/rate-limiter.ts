@@ -28,6 +28,10 @@ export interface RateLimiterConfig {
   geminiMaxCallsPerHour?: number;
   /** Gemini 每日最大调用数，超出触发熔断 (default: 2000) */
   geminiMaxCallsPerDay?: number;
+  /** Gemini 连续失败阈值，达到后立即打开熔断器 (default: 3) */
+  geminiMaxConsecutiveFailures?: number;
+  /** 失败熔断后的冷却期(ms)，冷却后自动放行探测 (default: 60_000) */
+  geminiCircuitCooldownMs?: number;
 }
 
 export interface RateLimiterStats {
@@ -35,6 +39,8 @@ export interface RateLimiterStats {
   gemini_calls_last_hour: number;
   gemini_calls_today: number;
   gemini_circuit_open: boolean;
+  /** 当前 Gemini 连续失败次数 */
+  gemini_consecutive_failures: number;
 }
 
 // =========================================================================
@@ -60,6 +66,8 @@ export class RateLimiter {
   private readonly maxCallsPerMinute: number;
   private readonly geminiMaxCallsPerHour: number;
   private readonly geminiMaxCallsPerDay: number;
+  private readonly geminiMaxConsecutiveFailures: number;
+  private readonly geminiCircuitCooldownMs: number;
 
   /** 全局调用时间戳（滑动窗口 60s） */
   private callTimestamps: number[] = [];
@@ -69,11 +77,18 @@ export class RateLimiter {
   private geminiDayCount = 0;
   /** 熔断器状态 */
   private _geminiCircuitOpen = false;
+  /** Gemini 连续失败计数 — 用于失败驱动熔断 */
+  private _consecutiveGeminiFailures = 0;
+  /** 失败熔断触发时的时间戳 — 用于冷却期自动恢复 */
+  private _failureCircuitOpenedAt = 0;
 
   constructor(config: RateLimiterConfig = {}) {
     this.maxCallsPerMinute = config.maxCallsPerMinute ?? 60;
     this.geminiMaxCallsPerHour = config.geminiMaxCallsPerHour ?? 200;
     this.geminiMaxCallsPerDay = config.geminiMaxCallsPerDay ?? 2000;
+    this.geminiMaxConsecutiveFailures =
+      config.geminiMaxConsecutiveFailures ?? 3;
+    this.geminiCircuitCooldownMs = config.geminiCircuitCooldownMs ?? 60_000;
   }
 
   /**
@@ -98,13 +113,16 @@ export class RateLimiter {
   }
 
   /**
-   * 记录一次 Gemini API 调用。
-   * 自动更新熔断器状态。
+   * 记录一次 Gemini API 成功调用。
+   * 自动更新熔断器状态 + 重置连续失败计数。
    */
   recordGeminiCall(): void {
     const now = Date.now();
     this.geminiCallTimestamps.push(now);
     this.geminiDayCount++;
+
+    // 成功调用 → 重置连续失败计数
+    this._consecutiveGeminiFailures = 0;
 
     // 清理小时窗口
     this.geminiCallTimestamps = this.geminiCallTimestamps.filter(
@@ -127,6 +145,32 @@ export class RateLimiter {
         dailyCount: this.geminiDayCount,
         dailyLimit: this.geminiMaxCallsPerDay,
       });
+    }
+  }
+
+  /**
+   * 记录一次 Gemini API 失败。
+   * 连续失败达到阈值时立即打开熔断器，冷却期后自动恢复。
+   *
+   * 这是解决 "Gemini 持续 429 时每个请求白白等待 ~10s 再 fallback" 问题的核心修复。
+   */
+  recordGeminiFailure(): void {
+    this._consecutiveGeminiFailures++;
+
+    if (
+      this._consecutiveGeminiFailures >= this.geminiMaxConsecutiveFailures &&
+      !this._geminiCircuitOpen
+    ) {
+      this._geminiCircuitOpen = true;
+      this._failureCircuitOpenedAt = Date.now();
+      log.warn(
+        "Gemini circuit breaker OPEN: consecutive failures threshold reached",
+        {
+          consecutiveFailures: this._consecutiveGeminiFailures,
+          threshold: this.geminiMaxConsecutiveFailures,
+          cooldownMs: this.geminiCircuitCooldownMs,
+        },
+      );
     }
   }
 
@@ -154,22 +198,52 @@ export class RateLimiter {
       (t) => now - t < ONE_HOUR_MS,
     );
 
-    if (this.geminiCallTimestamps.length < this.geminiMaxCallsPerHour) {
-      // 小时窗口已恢复
-      this._geminiCircuitOpen = false;
-      log.info("Gemini circuit breaker CLOSED: hourly window recovered");
-      return false;
+    // 小时预算仍然超限 — 保持打开
+    if (this.geminiCallTimestamps.length >= this.geminiMaxCallsPerHour) {
+      return true;
     }
 
-    return true;
+    // 失败熔断冷却检查: 冷却期未过则保持打开
+    if (
+      this._failureCircuitOpenedAt > 0 &&
+      now - this._failureCircuitOpenedAt < this.geminiCircuitCooldownMs
+    ) {
+      return true;
+    }
+
+    // 所有条件均已恢复 — 关闭熔断器
+    this._geminiCircuitOpen = false;
+    this._consecutiveGeminiFailures = 0;
+    this._failureCircuitOpenedAt = 0;
+    log.info("Gemini circuit breaker CLOSED: recovered", {
+      hourlyCount: this.geminiCallTimestamps.length,
+      hourlyLimit: this.geminiMaxCallsPerHour,
+    });
+    return false;
   }
 
   /**
    * 重置每日计数器（手动调用或外部定时器触发）。
+   *
+   * [FIX H-3]: 如果 Gemini 正处于连续失败状态（达到失败阈值），
+   * 仅重置日预算但保持熔断器打开，防止所有请求再次涌入故障的 Gemini。
    */
   resetDaily(): void {
     this.geminiDayCount = 0;
-    this._geminiCircuitOpen = false;
+    // [FIX H-3]: 连续失败仍超阈值时保持熔断器打开
+    // 同时刷新 _failureCircuitOpenedAt，确保 getter 的冷却期检查不会立即恢复
+    if (this._consecutiveGeminiFailures >= this.geminiMaxConsecutiveFailures) {
+      this._failureCircuitOpenedAt = Date.now();
+      log.warn(
+        "Gemini daily budget reset, circuit remains open due to ongoing failures",
+        {
+          consecutiveFailures: this._consecutiveGeminiFailures,
+          threshold: this.geminiMaxConsecutiveFailures,
+        },
+      );
+    } else {
+      this._geminiCircuitOpen = false;
+    }
     log.info("Gemini daily budget reset");
   }
 
@@ -187,6 +261,7 @@ export class RateLimiter {
       ).length,
       gemini_calls_today: this.geminiDayCount,
       gemini_circuit_open: this._geminiCircuitOpen,
+      gemini_consecutive_failures: this._consecutiveGeminiFailures,
     };
   }
 }

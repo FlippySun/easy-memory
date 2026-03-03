@@ -8,6 +8,7 @@
 > **让 AI 跨会话、跨项目持久化记忆。** 基于 Qdrant 向量数据库 + Ollama/Gemini Embedding 的 MCP 记忆服务。
 
 Easy Memory 提供双 Shell 架构：
+
 - **MCP Shell** — 通过 stdio 与 Claude Desktop / Cursor / VS Code 等 IDE 直接通信
 - **HTTP Shell** — RESTful API，支持远程访问、多客户端共享记忆
 
@@ -29,10 +30,10 @@ Easy Memory 提供双 Shell 架构：
 
 ### 前置条件
 
-| 依赖    | 版本   | 说明                         |
-| ------- | ------ | ---------------------------- |
-| Node.js | ≥ 20   | 运行 MCP Server              |
-| Docker  | ≥ 24   | 运行 Qdrant + Ollama         |
+| 依赖    | 版本 | 说明                 |
+| ------- | ---- | -------------------- |
+| Node.js | ≥ 20 | 运行 MCP Server      |
+| Docker  | ≥ 24 | 运行 Qdrant + Ollama |
 
 ### 方式一：npx 直接运行（MCP 模式）
 
@@ -180,14 +181,14 @@ curl -X POST http://localhost:3080/api/save \
 
 **请求字段：**
 
-| 字段         | 类型       | 必填 | 说明                                           |
-| ------------ | ---------- | ---- | ---------------------------------------------- |
-| `content`    | `string`   | ✅   | 记忆内容                                       |
-| `project`    | `string`   | ❌   | 项目标识（默认 `default`）                      |
+| 字段         | 类型       | 必填 | 说明                                                                                      |
+| ------------ | ---------- | ---- | ----------------------------------------------------------------------------------------- |
+| `content`    | `string`   | ✅   | 记忆内容                                                                                  |
+| `project`    | `string`   | ❌   | 项目标识（默认 `default`）                                                                |
 | `source`     | `string`   | ❌   | 来源：`conversation` / `code_context` / `tool_output` / `documentation` / `user_feedback` |
-| `fact_type`  | `string`   | ❌   | 类型：`observation` / `decision` / `preference` / `convention` / `dependency` |
-| `tags`       | `string[]` | ❌   | 标签列表                                       |
-| `confidence` | `number`   | ❌   | 置信度 0-1（默认 0.7）                          |
+| `fact_type`  | `string`   | ❌   | 类型：`observation` / `decision` / `preference` / `convention` / `dependency`             |
+| `tags`       | `string[]` | ❌   | 标签列表                                                                                  |
+| `confidence` | `number`   | ❌   | 置信度 0-1（默认 0.7）                                                                    |
 
 ### `POST /api/search`
 
@@ -202,14 +203,14 @@ curl -X POST http://localhost:3080/api/search \
 
 **请求字段：**
 
-| 字段               | 类型       | 必填 | 说明                         |
-| ------------------ | ---------- | ---- | ---------------------------- |
-| `query`            | `string`   | ✅   | 搜索查询                     |
-| `project`          | `string`   | ❌   | 项目标识                     |
-| `limit`            | `number`   | ❌   | 返回数量 1-20（默认 5）       |
-| `threshold`        | `number`   | ❌   | 相似度阈值 0-1（默认 0.3）    |
-| `include_outdated` | `boolean`  | ❌   | 是否包含已归档记忆            |
-| `tags`             | `string[]` | ❌   | 按标签过滤                   |
+| 字段               | 类型       | 必填 | 说明                       |
+| ------------------ | ---------- | ---- | -------------------------- |
+| `query`            | `string`   | ✅   | 搜索查询                   |
+| `project`          | `string`   | ❌   | 项目标识                   |
+| `limit`            | `number`   | ❌   | 返回数量 1-20（默认 5）    |
+| `threshold`        | `number`   | ❌   | 相似度阈值 0-1（默认 0.3） |
+| `include_outdated` | `boolean`  | ❌   | 是否包含已归档记忆         |
+| `tags`             | `string[]` | ❌   | 按标签过滤                 |
 
 ### `POST /api/forget`
 
@@ -227,6 +228,7 @@ curl -X POST http://localhost:3080/api/forget \
 ```
 
 **action 说明：**
+
 - `archive` — 软删除（标记为归档，搜索时默认不返回）
 - `outdated` — 标记为过时
 - `delete` — 从向量库中彻底删除
@@ -245,12 +247,12 @@ curl -H "Authorization: Bearer your-token" http://localhost:3080/api/status
 
 Easy Memory 暴露 4 个 MCP Tools：
 
-| Tool             | 说明                     |
-| ---------------- | ------------------------ |
-| `memory_save`    | 保存记忆到向量库          |
-| `memory_search`  | 语义检索相关记忆          |
-| `memory_forget`  | 归档/标记过时/删除记忆    |
-| `memory_status`  | 系统健康状态              |
+| Tool            | 说明                   |
+| --------------- | ---------------------- |
+| `memory_save`   | 保存记忆到向量库       |
+| `memory_search` | 语义检索相关记忆       |
+| `memory_forget` | 归档/标记过时/删除记忆 |
+| `memory_status` | 系统健康状态           |
 
 ---
 
@@ -291,26 +293,54 @@ docker pull thj8632/easy-memory:0.1.0
 
 ## 环境变量
 
-| 变量                   | 默认值                      | 说明                                           |
-| ---------------------- | --------------------------- | ---------------------------------------------- |
-| `EASY_MEMORY_MODE`     | `mcp`                       | 运行模式：`mcp` / `http`                       |
-| `QDRANT_URL`           | `http://localhost:6333`     | Qdrant 连接地址                                |
-| `QDRANT_API_KEY`       | `easy-memory-dev`           | Qdrant API Key                                 |
-| `EMBEDDING_PROVIDER`   | `ollama`                    | Embedding 引擎：`ollama` / `gemini` / `auto`   |
-| `OLLAMA_BASE_URL`      | `http://localhost:11434`    | Ollama 地址                                    |
-| `OLLAMA_MODEL`         | `bge-m3`                    | Ollama 模型名（1024 维）                        |
-| `OLLAMA_TIMEOUT_MS`    | `120000`                    | Ollama 请求超时（ms），首次加载模型需较长时间    |
-| `GEMINI_API_KEY`       | —                           | Google Gemini API Key（`gemini`/`auto` 模式必填）|
-| `GEMINI_MODEL`         | `gemini-embedding-001`      | Gemini Embedding 模型                           |
-| `DEFAULT_PROJECT`      | `default`                   | 默认项目标识                                    |
-| `HTTP_PORT`            | `3080`                      | HTTP Shell 监听端口                             |
-| `HTTP_HOST`            | `127.0.0.1`                 | HTTP Shell 监听地址                             |
-| `HTTP_AUTH_TOKEN`      | —                           | HTTP API Bearer Token                           |
-| `TRUST_PROXY`          | `false`                     | 信任反向代理 X-Forwarded-* 头                   |
-| `REQUIRE_TLS`          | `false`                     | 拒绝非 HTTPS 请求（需 TRUST_PROXY=true）        |
-| `RATE_LIMIT_PER_MINUTE`| `60`                        | 全局速率限制（次/分钟）                          |
-| `GEMINI_MAX_PER_HOUR`  | `200`                       | Gemini 每小时最大调用数                          |
-| `GEMINI_MAX_PER_DAY`   | `2000`                      | Gemini 每日最大调用数                            |
+| 变量                    | 默认值                   | 说明                                                       |
+| ----------------------- | ------------------------ | ---------------------------------------------------------- |
+| `EASY_MEMORY_MODE`      | `mcp`                    | 运行模式：`mcp` / `http`                                   |
+| `QDRANT_URL`            | `http://localhost:6333`  | Qdrant 连接地址                                            |
+| `QDRANT_API_KEY`        | `easy-memory-dev`        | Qdrant API Key                                             |
+| `EMBEDDING_PROVIDER`    | `ollama`                 | Embedding 引擎：`ollama` / `gemini` / `auto`               |
+| `OLLAMA_BASE_URL`       | `http://localhost:11434` | Ollama 地址                                                |
+| `OLLAMA_MODEL`          | `bge-m3`                 | Ollama 模型名（1024 维）                                   |
+| `OLLAMA_TIMEOUT_MS`     | `120000`                 | Ollama 请求超时（ms），首次加载模型需较长时间              |
+| `GEMINI_API_KEY`        | —                        | Google Cloud Vertex AI API Key（`gemini`/`auto` 模式必填） |
+| `GEMINI_PROJECT_ID`     | —                        | Google Cloud Project ID（`gemini`/`auto` 模式必填）        |
+| `GEMINI_REGION`         | `us-central1`            | Google Cloud Vertex AI 区域                                |
+| `GEMINI_MODEL`          | `gemini-embedding-001`   | Gemini Embedding 模型                                      |
+| `DEFAULT_PROJECT`       | `default`                | 默认项目标识                                               |
+| `HTTP_PORT`             | `3080`                   | HTTP Shell 监听端口                                        |
+| `HTTP_HOST`             | `127.0.0.1`              | HTTP Shell 监听地址                                        |
+| `HTTP_AUTH_TOKEN`       | —                        | HTTP API Bearer Token                                      |
+| `TRUST_PROXY`           | `false`                  | 信任反向代理 X-Forwarded-\* 头                             |
+| `REQUIRE_TLS`           | `false`                  | 拒绝非 HTTPS 请求（需 TRUST_PROXY=true）                   |
+| `RATE_LIMIT_PER_MINUTE` | `60`                     | 全局速率限制（次/分钟）                                    |
+| `GEMINI_MAX_PER_HOUR`   | `200`                    | Gemini 每小时最大调用数                                    |
+| `GEMINI_MAX_PER_DAY`    | `2000`                   | Gemini 每日最大调用数                                      |
+
+---
+
+## ⚠️ Breaking Changes (v0.2.0)
+
+### Vertex AI 迁移：`GEMINI_PROJECT_ID` 新增必填
+
+从 v0.2.0 起，Gemini Embedding 已从 Generative Language API (`generativelanguage.googleapis.com`) 迁移至 **Vertex AI** (`aiplatform.googleapis.com`)。
+
+**影响范围：** 使用 `EMBEDDING_PROVIDER=gemini` 或 `EMBEDDING_PROVIDER=auto` 的所有部署。
+
+**必须操作：**
+
+1. 新增环境变量 `GEMINI_PROJECT_ID`（Google Cloud 项目 ID）
+2. 可选设置 `GEMINI_REGION`（默认 `us-central1`）
+3. 确保 `GEMINI_API_KEY` 有 Vertex AI 权限
+
+```bash
+# .env 变更示例
+EMBEDDING_PROVIDER=gemini          # 或 auto
+GEMINI_API_KEY=your-api-key        # 无变化
+GEMINI_PROJECT_ID=my-gcp-project   # ⬅️ 新增必填
+GEMINI_REGION=us-central1          # 可选，默认 us-central1
+```
+
+> **纯 Ollama 用户不受影响**（`EMBEDDING_PROVIDER=ollama` 为默认值）。
 
 ---
 

@@ -43,6 +43,8 @@ export interface AppConfig {
   ollamaBaseUrl: string;
   ollamaModel: string;
   geminiApiKey: string;
+  geminiProjectId: string;
+  geminiRegion: string;
   geminiModel: string;
 
   // Application
@@ -111,14 +113,23 @@ export function parseAppConfig(
   }
 
   const geminiApiKey = env.GEMINI_API_KEY ?? "";
+  const geminiProjectId = env.GEMINI_PROJECT_ID ?? "";
 
-  // Gemini/Auto 模式必须提供 API Key
+  // Gemini/Auto 模式必须提供 API Key 和 Project ID
   if (
     (embeddingProvider === "gemini" || embeddingProvider === "auto") &&
     !geminiApiKey
   ) {
     throw new Error(
       `EMBEDDING_PROVIDER="${embeddingProvider}" requires GEMINI_API_KEY env var`,
+    );
+  }
+  if (
+    (embeddingProvider === "gemini" || embeddingProvider === "auto") &&
+    !geminiProjectId
+  ) {
+    throw new Error(
+      `EMBEDDING_PROVIDER="${embeddingProvider}" requires GEMINI_PROJECT_ID env var`,
     );
   }
 
@@ -137,6 +148,8 @@ export function parseAppConfig(
     ollamaBaseUrl: env.OLLAMA_BASE_URL ?? "http://localhost:11434",
     ollamaModel: env.OLLAMA_MODEL ?? "bge-m3",
     geminiApiKey,
+    geminiProjectId,
+    geminiRegion: env.GEMINI_REGION ?? "us-central1",
     geminiModel: env.GEMINI_MODEL ?? "gemini-embedding-001",
 
     defaultProject: env.DEFAULT_PROJECT ?? "default",
@@ -208,7 +221,12 @@ export function createContainer(config: AppConfig): AppContainer {
   ) {
     const geminiProvider = new GeminiEmbeddingProvider({
       apiKey: config.geminiApiKey,
+      projectId: config.geminiProjectId,
+      region: config.geminiRegion,
       model: config.geminiModel,
+      // [FIX C-1]: 传递熔断器检查回调，Provider 内部重试时可检查熔断状态。
+      // 防止 100 个并发请求穿透熔断器窗口期，每个白白浪费 ~8.5s 重试。
+      isCircuitOpen: () => rateLimiter.isGeminiCircuitOpen,
     });
 
     if (config.embeddingProvider === "auto") {
@@ -238,6 +256,11 @@ export function createContainer(config: AppConfig): AppContainer {
     onSuccess: (result) => {
       if (result.provider === "gemini") {
         rateLimiter.recordGeminiCall();
+      }
+    },
+    onFailure: (failure) => {
+      if (failure.provider === "gemini") {
+        rateLimiter.recordGeminiFailure();
       }
     },
   });
