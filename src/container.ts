@@ -48,6 +48,9 @@ export interface AppConfig {
   // Application
   defaultProject: string;
 
+  // Timeouts
+  ollamaTimeoutMs: number;
+
   // Rate Limiting
   rateLimitPerMinute: number;
   geminiMaxPerHour: number;
@@ -138,6 +141,8 @@ export function parseAppConfig(
 
     defaultProject: env.DEFAULT_PROJECT ?? "default",
 
+    ollamaTimeoutMs: safeParseInt(env.OLLAMA_TIMEOUT_MS, 120_000),
+
     rateLimitPerMinute: safeParseInt(env.RATE_LIMIT_PER_MINUTE, 60),
     geminiMaxPerHour: safeParseInt(env.GEMINI_MAX_PER_HOUR, 200),
     geminiMaxPerDay: safeParseInt(env.GEMINI_MAX_PER_DAY, 2000),
@@ -194,6 +199,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const ollamaProvider = new OllamaEmbeddingProvider({
     baseUrl: config.ollamaBaseUrl,
     model: config.ollamaModel,
+    timeoutMs: config.ollamaTimeoutMs,
   });
 
   if (

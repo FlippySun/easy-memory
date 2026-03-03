@@ -232,7 +232,7 @@ interface OllamaEmbeddingResponse {
  *
  * - Endpoint: POST /api/embeddings
  * - Model: bge-m3 (1024 维)
- * - 默认超时: 10s, 5 次重试
+ * - 默认超时: 120s (首次模型加载需要时间), 5 次重试
  */
 export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
   readonly name = "ollama";
@@ -242,7 +242,7 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
 
   constructor(config: OllamaProviderConfig = {}) {
     super({
-      timeoutMs: config.timeoutMs ?? 10_000,
+      timeoutMs: config.timeoutMs ?? 120_000,
       maxRetries: config.maxRetries ?? 5,
     });
     this.baseUrl = config.baseUrl ?? "http://localhost:11434";
