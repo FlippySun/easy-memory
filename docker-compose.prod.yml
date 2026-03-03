@@ -1,0 +1,124 @@
+# =============================================================================
+# Easy Memory — Docker Compose (Production)
+# =============================================================================
+# Usage:
+#   cp .env.example .env  # 编辑配置 (设置强密码!)
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 生产特性:
+#   - 使用预构建镜像 (不本地构建)
+#   - Qdrant 不暴露端口 (仅内部网络)
+#   - Ollama 不暴露端口 (仅内部网络)
+#   - 资源限制 (memory/cpu)
+#   - 日志限制 (防止磁盘打满)
+# =============================================================================
+
+services:
+  # ---- Easy Memory (HTTP mode) ----
+  easy-memory:
+    image: thj8632/easy-memory:latest
+    container_name: easy-memory
+    restart: always
+    ports:
+      - "127.0.0.1:3080:3080"  # 仅本机可达，由 Caddy/Nginx 反代
+    environment:
+      - EASY_MEMORY_MODE=http
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-bge-m3}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN}
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=3080
+      - TRUST_PROXY=true
+      - REQUIRE_TLS=true
+      - DEFAULT_PROJECT=${DEFAULT_PROJECT:-default}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - internal
+
+  # ---- Qdrant Vector Database ----
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: always
+    # 不暴露端口到宿主机 — 仅内部网络
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ---- Ollama (Local Embedding) ----
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: always
+    # 不暴露端口到宿主机 — 仅内部网络
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks:
+      - internal
+
+volumes:
+  qdrant_data:
+  ollama_data:
+
+networks:
+  internal:
+    driver: bridge

@@ -4,6 +4,39 @@
   "description": "MCP persistent memory service powered by Qdrant + Ollama",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "easy-memory": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FlippySun/easy-memory.git"
+  },
+  "homepage": "https://github.com/FlippySun/easy-memory#readme",
+  "bugs": {
+    "url": "https://github.com/FlippySun/easy-memory/issues"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "qdrant",
+    "ollama",
+    "embedding",
+    "ai-agent",
+    "vector-database",
+    "claude",
+    "cursor"
+  ],
+  "author": "FlippySun",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

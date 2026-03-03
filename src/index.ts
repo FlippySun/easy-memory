@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @module index
  * @description Easy Memory 入口 — 双壳架构路由。

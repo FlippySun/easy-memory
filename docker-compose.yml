@@ -1,0 +1,84 @@
+# =============================================================================
+# Easy Memory — Docker Compose (Development)
+# =============================================================================
+# Usage:
+#   cp .env.example .env  # 编辑配置
+#   docker compose up -d
+#
+# Includes: Easy Memory + Qdrant + Ollama (with bge-m3 auto-pull)
+# =============================================================================
+
+services:
+  # ---- Easy Memory (HTTP mode) ----
+  easy-memory:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: easy-memory
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-3080}:3080"
+    environment:
+      - EASY_MEMORY_MODE=http
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-easy-memory-dev}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-bge-m3}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-dev-token-change-me}
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=3080
+      - TRUST_PROXY=${TRUST_PROXY:-false}
+      - REQUIRE_TLS=${REQUIRE_TLS:-false}
+      - DEFAULT_PROJECT=${DEFAULT_PROJECT:-default}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ---- Qdrant Vector Database ----
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-easy-memory-dev}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+
+  # ---- Ollama (Local Embedding) ----
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+volumes:
+  qdrant_data:
+  ollama_data:

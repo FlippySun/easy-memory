@@ -1,0 +1,38 @@
+# =============================================================================
+# Easy Memory — .dockerignore
+# =============================================================================
+
+node_modules
+dist
+.git
+.gitignore
+.github
+.planning
+.continue-here.md
+
+# Test files
+tests
+vitest.config.ts
+vitest.e2e.config.ts
+vitest.e2e-dual.config.ts
+coverage
+
+# Docs & templates (not needed in image)
+*.md
+!README.md
+deploy
+docs
+
+# IDE
+.vscode
+.idea
+
+# Secrets
+secrets.json
+.env
+.env.*
+.npmrc
+
+# OS files
+.DS_Store
+Thumbs.db

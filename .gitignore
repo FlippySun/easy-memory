@@ -24,6 +24,10 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# Secrets (敏感凭证，绝对禁止提交)
+secrets.json
+.npmrc
+
 # Test coverage
 coverage/
 
