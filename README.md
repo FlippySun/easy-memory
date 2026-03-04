@@ -22,6 +22,7 @@ Easy Memory 提供双 Shell 架构：
 - [MCP Tools](#mcp-tools)
 - [Docker 部署](#docker-部署)
 - [环境变量](#环境变量)
+- [Web UI 管理面板](#web-ui-管理面板)
 - [架构文档](#架构文档)
 
 ---
@@ -295,12 +296,12 @@ docker pull thj8632/easy-memory:0.2.1
 
 ### 前置条件
 
-| 需求     | 说明                                         |
-| -------- | -------------------------------------------- |
-| VPS      | 2C/4G+ 内存（Ollama bge-m3 需 ~2G）         |
-| 域名     | A 记录解析到 VPS IP                          |
-| Docker   | Docker ≥ 24 + Docker Compose v2              |
-| 端口     | 80/443 对外开放（反向代理用）                |
+| 需求   | 说明                                |
+| ------ | ----------------------------------- |
+| VPS    | 2C/4G+ 内存（Ollama bge-m3 需 ~2G） |
+| 域名   | A 记录解析到 VPS IP                 |
+| Docker | Docker ≥ 24 + Docker Compose v2     |
+| 端口   | 80/443 对外开放（反向代理用）       |
 
 ### 1. 部署服务
 
@@ -421,23 +422,23 @@ JetBrains IDE — 添加 MCP Server：
 Authorization: Bearer <ADMIN_TOKEN>
 ```
 
-| 功能         | 方法       | 路径                           |
-| ------------ | ---------- | ------------------------------ |
-| 创建 Key     | `POST`     | `/api/admin/keys`              |
-| 列出全部 Key | `GET`      | `/api/admin/keys`              |
-| 查看 Key     | `GET`      | `/api/admin/keys/:id`          |
-| 更新 Key     | `PATCH`    | `/api/admin/keys/:id`          |
-| 吊销 Key     | `DELETE`   | `/api/admin/keys/:id`          |
-| 轮换 Key     | `POST`     | `/api/admin/keys/:id/rotate`   |
-| 封禁 IP      | `POST`     | `/api/admin/bans`              |
-| 列出 IP 封禁 | `GET`      | `/api/admin/bans`              |
-| 解封 IP      | `DELETE`   | `/api/admin/bans/:ip`          |
-| 系统总览     | `GET`      | `/api/admin/analytics/overview`|
-| 用户用量     | `GET`      | `/api/admin/analytics/users`   |
-| 搜索命中率   | `GET`      | `/api/admin/analytics/hit-rate`|
-| 审计日志     | `GET`      | `/api/admin/audit/logs`        |
-| 导出日志     | `GET`      | `/api/admin/audit/export`      |
-| 运行时配置   | `GET/PATCH`| `/api/admin/config`            |
+| 功能         | 方法        | 路径                            |
+| ------------ | ----------- | ------------------------------- |
+| 创建 Key     | `POST`      | `/api/admin/keys`               |
+| 列出全部 Key | `GET`       | `/api/admin/keys`               |
+| 查看 Key     | `GET`       | `/api/admin/keys/:id`           |
+| 更新 Key     | `PATCH`     | `/api/admin/keys/:id`           |
+| 吊销 Key     | `DELETE`    | `/api/admin/keys/:id`           |
+| 轮换 Key     | `POST`      | `/api/admin/keys/:id/rotate`    |
+| 封禁 IP      | `POST`      | `/api/admin/bans`               |
+| 列出 IP 封禁 | `GET`       | `/api/admin/bans`               |
+| 解封 IP      | `DELETE`    | `/api/admin/bans/:ip`           |
+| 系统总览     | `GET`       | `/api/admin/analytics/overview` |
+| 用户用量     | `GET`       | `/api/admin/analytics/users`    |
+| 搜索命中率   | `GET`       | `/api/admin/analytics/hit-rate` |
+| 审计日志     | `GET`       | `/api/admin/audit/logs`         |
+| 导出日志     | `GET`       | `/api/admin/audit/export`       |
+| 运行时配置   | `GET/PATCH` | `/api/admin/config`             |
 
 ---
 
@@ -463,6 +464,8 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `TRUST_PROXY`           | `false`                  | 信任反向代理 X-Forwarded-\* 头                             |
 | `REQUIRE_TLS`           | `false`                  | 拒绝非 HTTPS 请求（需 TRUST_PROXY=true）                   |
 | `ADMIN_TOKEN`           | —                        | Admin API Token（留空则禁用管理后台）                      |
+| `ADMIN_USERNAME`        | —                        | Admin 用户名 — 首次启动时自动创建管理员账户                |
+| `ADMIN_PASSWORD`        | —                        | Admin 密码 — 与 ADMIN_USERNAME 配合使用                    |
 | `RATE_LIMIT_PER_MINUTE` | `60`                     | 全局速率限制（次/分钟）                                    |
 | `GEMINI_MAX_PER_HOUR`   | `200`                    | Gemini 每小时最大调用数                                    |
 | `GEMINI_MAX_PER_DAY`    | `2000`                   | Gemini 每日最大调用数                                      |
@@ -501,7 +504,10 @@ GEMINI_REGION=us-central1          # 可选，默认 us-central1
 pnpm install          # 安装依赖
 pnpm build            # TypeScript 编译
 pnpm typecheck        # 类型检查
-pnpm test             # 单元测试 (786 tests)
+pnpm test             # 单元测试 (842 tests)
+pnpm build:web        # 构建 Web UI 前端
+pnpm build:all        # 构建后端 + 前端
+pnpm dev:web          # 前端开发模式 (HMR)
 pnpm test:e2e         # E2E 测试 (需要 Qdrant + Ollama)
 ```
 
@@ -512,8 +518,9 @@ src/
 ├── index.ts              # 入口 — 双模式路由
 ├── container.ts          # 依赖注入容器
 ├── api/                  # HTTP Shell (Hono)
-│   ├── server.ts         # HTTP 路由 + 审计中间件
+│   ├── server.ts         # HTTP 路由 + 审计中间件 + SPA 静态文件
 │   ├── admin-routes.ts   # Admin API (Key/Ban/Analytics/Audit/Config)
+│   ├── auth-routes.ts    # Auth API (Login/Register/Users)
 │   ├── admin-auth.ts     # Admin Token 鉴权
 │   ├── schemas.ts
 │   └── middlewares.ts    # 双层鉴权 (Master + API Key)
@@ -528,7 +535,8 @@ src/
 │   ├── audit.ts          # JSONL 审计日志 (缓冲写入)
 │   ├── api-key-manager.ts # API Key 管理 (SHA-256 哈希)
 │   ├── ban-manager.ts    # IP/Key 封禁
-│   └── runtime-config.ts # 运行时配置管理
+│   ├── runtime-config.ts # 运行时配置管理
+│   └── auth.ts           # 用户认证 (scrypt + JWT)
 ├── tools/                # MCP Tool 处理器
 │   ├── save.ts
 │   ├── search.ts
@@ -539,7 +547,8 @@ src/
 ├── types/                # Schema & 类型
 │   ├── schema.ts         # MCP 数据契约
 │   ├── admin-schema.ts   # Admin API Schema
-│   └── audit-schema.ts   # 审计日志 Schema
+│   ├── audit-schema.ts   # 审计日志 Schema
+│   └── auth-schema.ts    # Auth/RBAC Schema
 └── utils/                # 工具
     ├── hash.ts           # SHA-256 去重
     ├── logger.ts         # stderr JSON 日志
@@ -547,6 +556,66 @@ src/
     ├── rate-limiter.ts   # 速率限制 (全局 + Per-Key)
     ├── ip.ts             # 代理感知 IP 提取
     └── shutdown.ts       # 优雅关闭
+```
+
+web/ # Web UI Admin Panel (React)
+├── src/
+│ ├── App.tsx # 路由 + 权限守卫
+│ ├── api/client.ts # API 客户端 (JWT 自动注入)
+│ ├── contexts/auth.tsx # Auth 上下文
+│ ├── components/ # UI 组件 (Button/Card/Modal/Table...)
+│ └── pages/ # 页面 (Login/Dashboard/ApiKeys/Bans/
+│ # Analytics/AuditLogs/Users/Settings)
+└── vite.config.ts # Vite 构建配置
+
+````
+
+---
+
+## Web UI 管理面板
+
+访问 `http://your-server:3080/` 打开 Web UI 管理面板。
+
+### 首次设置
+
+1. 设置环境变量创建管理员账户：
+   ```bash
+   ADMIN_USERNAME=your-admin-name
+   ADMIN_PASSWORD=your-secure-password
+   ADMIN_TOKEN=your-admin-token
+````
+
+2. 启动服务后通过浏览器打开 Web UI
+   3 使用管理员账号密码登录
+
+### 功能
+
+- **Dashboard**: 实时概览（请求量/成功率/延迟/系统状态）
+- **API Keys**: 密钥管理（创建/启用/禁用/删除）
+- **Bans**: IP/Key 封禁管理
+- **Analytics**: 用量分析（时间线/操作分布/错误追踪）
+- **Audit Logs**: 审计日志（分页/筛选/导出）
+- **Users**: 用户管理（创建/角色切换/启用禁用/删除）
+- **Settings**: 运行时配置编辑
+
+### 角色权限
+
+| 权限         | Admin | User |
+| ------------ | :---: | :--: |
+| 用户管理     |  ✅   |  ❌  |
+| API Key 管理 |  ✅   |  ❌  |
+| Ban 管理     |  ✅   |  ❌  |
+| 配置修改     |  ✅   |  ❌  |
+| 分析查看     |  ✅   |  ✅  |
+| 审计日志     |  ✅   |  ✅  |
+| 记忆操作     |  ✅   |  ✅  |
+
+### 构建
+
+```bash
+pnpm build:web    # 构建前端到 dist/web/
+pnpm build:all    # 构建后端 + 前端
+pnpm dev:web      # 前端开发模式 (HMR + API 代理)
 ```
 
 ---

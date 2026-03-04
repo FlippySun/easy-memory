@@ -21,6 +21,11 @@ export const AUDIT_OPERATION = [
   "memory_search",
   "memory_forget",
   "memory_status",
+  "auth_login",
+  "auth_login_failed",
+  "auth_register",
+  "auth_user_update",
+  "auth_user_delete",
 ] as const;
 
 export type AuditOperation = (typeof AUDIT_OPERATION)[number];

@@ -1,15 +1,16 @@
 /**
  * @module admin-auth
- * @description Admin 认证中间件 — 独立于用户 Token 的管理端认证层。
+ * @description Admin 认证中间件 — 双路径认证 (ADMIN_TOKEN + JWT admin)。
  *
  * 设计:
- * - ADMIN_TOKEN 环境变量: 独立于 HTTP_AUTH_TOKEN
- * - Admin 路由使用此中间件
- * - 用户路由使用原有的 bearerAuth (支持 master token + managed API keys)
+ * - ADMIN_TOKEN 环境变量: 独立于 HTTP_AUTH_TOKEN (原有行为)
+ * - JWT admin token: Web UI 用户登录后获取的 JWT (admin 角色)
+ * - Admin 路由同时支持两种认证方式
  *
  * 安全考量:
  * - Timing-safe 比较防止侧信道攻击
  * - Admin token 为空 = admin 功能完全禁用 (返回 403，非跳过)
+ * - JWT 验证复用 AuthService (签名 + 过期 + 角色检查)
  * - 所有 admin 操作记录审计
  *
  * 铁律: 绝对禁止 console.log (MCP stdio 依赖)
@@ -19,6 +20,7 @@ import type { Context, Next } from "hono";
 import { timingSafeEqual } from "node:crypto";
 import { log } from "../utils/logger.js";
 import { getClientIp as getClientIpShared } from "../utils/ip.js";
+import type { AuthService } from "../services/auth.js";
 
 /**
  * Timing-safe 字符串比较。
@@ -37,15 +39,17 @@ function safeCompare(a: string, b: string): boolean {
  * 创建 Admin Token 认证中间件。
  *
  * @param adminToken - ADMIN_TOKEN 环境变量值
+ * @param authService - 可选的 AuthService，用于 JWT 认证回退
  * @returns Hono 中间件
  *
  * 行为:
  * - adminToken 为空 → 403 Forbidden (admin 功能禁用)
  * - 无 Authorization 头 → 401
- * - Token 不匹配 → 401
- * - Token 匹配 → 放行
+ * - Token 匹配 ADMIN_TOKEN → 放行
+ * - Token 为有效 JWT 且角色为 admin → 放行
+ * - 其他 → 401
  */
-export function adminAuth(adminToken: string) {
+export function adminAuth(adminToken: string, authService?: AuthService) {
   return async (c: Context, next: Next) => {
     // Admin 功能未配置 → 403 (非 401，因为不是认证问题而是功能禁用)
     if (!adminToken) {
@@ -72,19 +76,34 @@ export function adminAuth(adminToken: string) {
     const scheme = authorization.slice(0, spaceIdx);
     const token = authorization.slice(spaceIdx + 1).trim();
 
-    if (
-      scheme.toLowerCase() !== "bearer" ||
-      !token ||
-      !safeCompare(token, adminToken)
-    ) {
-      log.warn("Admin auth failed", {
-        path: c.req.path,
-        ip: getClientIpShared(c),
-      });
-      return c.json({ error: "Invalid admin credentials" }, 401);
+    if (scheme.toLowerCase() !== "bearer" || !token) {
+      return c.json({ error: "Invalid authorization format" }, 401);
     }
 
-    await next();
+    // Path 1: ADMIN_TOKEN — timing-safe 比较
+    if (safeCompare(token, adminToken)) {
+      await next();
+      return;
+    }
+
+    // Path 2: JWT — 验证签名 + 过期 + admin 角色 (C2 FIX)
+    if (authService) {
+      const payload = authService.verifyToken(token);
+      if (payload && payload.role === "admin") {
+        // 验证用户仍存在且活跃 (防止已删除/停用用户的 JWT 继续使用)
+        const user = authService.getUserById(payload.sub);
+        if (user && user.is_active) {
+          await next();
+          return;
+        }
+      }
+    }
+
+    log.warn("Admin auth failed", {
+      path: c.req.path,
+      ip: getClientIpShared(c),
+    });
+    return c.json({ error: "Invalid admin credentials" }, 401);
   };
 }
 

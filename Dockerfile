@@ -16,12 +16,17 @@ WORKDIR /app
 
 # Install dependencies (layer cache)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY web/package.json ./web/
 RUN pnpm install --frozen-lockfile --prod=false
 
-# Copy source & build
+# Copy source & build backend
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN pnpm build
+
+# Build frontend (Web UI)
+COPY web/ ./web/
+RUN cd web && pnpm build
 
 # Prune dev dependencies
 RUN pnpm prune --prod

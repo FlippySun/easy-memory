@@ -27,6 +27,7 @@ import { AnalyticsService } from "./services/analytics.js";
 import { ApiKeyManager } from "./services/api-key-manager.js";
 import { BanManager } from "./services/ban-manager.js";
 import { RuntimeConfigManager } from "./services/runtime-config.js";
+import { AuthService } from "./services/auth.js";
 import { log } from "./utils/logger.js";
 
 // =========================================================================
@@ -79,6 +80,12 @@ export interface AppConfig {
   // Admin Management
   /** Admin API Token — 独立于 httpAuthToken，空串 = admin 功能禁用 */
   adminToken: string;
+
+  // Auth / User Management
+  /** Admin 用户名 — 首次启动时种子 admin 用户 */
+  adminUsername: string;
+  /** Admin 密码 — 首次启动时种子 admin 用户 */
+  adminPassword: string;
 }
 
 /**
@@ -101,6 +108,8 @@ export interface AppContainer {
   readonly banManager: BanManager;
   /** 运行时配置管理 */
   readonly runtimeConfig: RuntimeConfigManager;
+  /** 用户认证服务 */
+  readonly auth: AuthService;
 }
 
 // =========================================================================
@@ -190,6 +199,10 @@ export function parseAppConfig(
 
     // Admin Management
     adminToken: env.ADMIN_TOKEN ?? "",
+
+    // Auth / User Management
+    adminUsername: env.ADMIN_USERNAME ?? "",
+    adminPassword: env.ADMIN_PASSWORD ?? "",
   };
 
   // ⚠️ 矛盾配置检测: REQUIRE_TLS 需要 TRUST_PROXY 才有意义（fast-fail）
@@ -333,6 +346,16 @@ export function createContainer(config: AppConfig): AppContainer {
     },
   });
 
+  // ⑫ AuthService — 用户认证 + RBAC (共享 admin DB)
+  const auth = new AuthService({
+    adminToken: config.adminToken,
+    adminUsername: config.adminUsername,
+    adminPassword: config.adminPassword,
+  });
+  if (adminDb) {
+    auth.open(adminDb);
+  }
+
   return {
     config,
     qdrant,
@@ -344,5 +367,6 @@ export function createContainer(config: AppConfig): AppContainer {
     apiKeyManager,
     banManager,
     runtimeConfig,
+    auth,
   };
 }

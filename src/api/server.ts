@@ -38,6 +38,7 @@ import {
   HttpForgetInputSchema,
 } from "./schemas.js";
 import { createAdminRoutes } from "./admin-routes.js";
+import { createAuthRoutes } from "./auth-routes.js";
 import { adminAuth } from "./admin-auth.js";
 import type { AuditOperation, AuditOutcome } from "../types/audit-schema.js";
 
@@ -132,7 +133,17 @@ function createApp(container: AppContainer): Hono<Env> {
     await next();
   });
 
-  // ===== Admin Routes — 独立的 ADMIN_TOKEN 认证 =====
+  // ===== Auth Routes — 登录公开，其他需 JWT =====
+  const authRoutes = createAuthRoutes({
+    authService: container.auth,
+    adminToken: config.adminToken,
+    audit: container.audit,
+    analytics: container.analytics,
+    trustProxy: config.trustProxy,
+  });
+  app.route("/api/auth", authRoutes);
+
+  // ===== Admin Routes — ADMIN_TOKEN + JWT admin 双路径认证 (C2 FIX) =====
   const adminRoutes = createAdminRoutes({
     analytics: container.analytics,
     audit: container.audit,
@@ -140,7 +151,7 @@ function createApp(container: AppContainer): Hono<Env> {
     banManager: container.banManager,
     runtimeConfig: container.runtimeConfig,
   });
-  app.use("/api/admin/*", adminAuth(config.adminToken));
+  app.use("/api/admin/*", adminAuth(config.adminToken, container.auth));
   app.route("/api/admin", adminRoutes);
 
   // 鉴权: 除 /health 和 /api/admin/* 外所有路由需要 Bearer Token
@@ -159,6 +170,11 @@ function createApp(container: AppContainer): Hono<Env> {
       await next();
       return;
     }
+    // C5 FIX: Auth 路由有自己的 jwtAuth 中间件，跳过全局 bearerAuth
+    if (c.req.path.startsWith("/api/auth")) {
+      await next();
+      return;
+    }
     return authMiddleware(c, next);
   });
 
@@ -174,6 +190,12 @@ function createApp(container: AppContainer): Hono<Env> {
     }
     // Admin 路由跳过全局限流 (admin 有权不受限)
     if (c.req.path.startsWith("/api/admin")) {
+      await next();
+      return;
+    }
+    // Auth 路由有独立的登录限流 (auth-routes.ts)，跳过全局限流
+    // 防止攻击者通过 flood /api/auth/login 耗尽全局配额阻塞其他用户的记忆操作
+    if (c.req.path.startsWith("/api/auth")) {
       await next();
       return;
     }
@@ -196,6 +218,12 @@ function createApp(container: AppContainer): Hono<Env> {
   app.use("/api/*", async (c, next) => {
     // Admin 路由有自己的审计机制 (admin-routes.ts 中的 recordAdminAction)
     if (c.req.path.startsWith("/api/admin")) {
+      await next();
+      return;
+    }
+    // Auth 路由有自己的审计机制 (auth-routes.ts 中的 recordAuthAudit)
+    // 跳过全局审计防止双重记录
+    if (c.req.path.startsWith("/api/auth")) {
       await next();
       return;
     }
@@ -322,6 +350,105 @@ function createApp(container: AppContainer): Hono<Env> {
     return c.json(result);
   });
 
+  // ===== Static File Serving — SPA (Web UI) =====
+  // 尝试从 dist/web 目录提供静态文件，回退到 index.html (SPA 路由)
+  app.get("*", async (c) => {
+    const path = c.req.path;
+
+    // API 路由不应到达这里
+    if (path.startsWith("/api/")) {
+      return c.json({ error: "Not found" }, 404);
+    }
+
+    try {
+      const { readFile } = await import("node:fs/promises");
+      const { join, extname } = await import("node:path");
+      const { fileURLToPath } = await import("node:url");
+
+      // 计算 web 静态文件目录
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = join(__filename, "..");
+      const webRoot = join(__dirname, "..", "web");
+
+      // MIME 类型映射
+      const mimeTypes: Record<string, string> = {
+        ".html": "text/html; charset=utf-8",
+        ".js": "application/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+      };
+
+      // 安全: 防止目录穿越 (path 不能包含 ..)
+      const safePath = path.replace(/\.\./g, "").replace(/\/+/g, "/");
+      const filePath = safePath === "/" ? "/index.html" : safePath;
+      const fullPath = join(webRoot, filePath);
+
+      // 确保文件路径在 webRoot 内
+      if (!fullPath.startsWith(webRoot)) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+
+      try {
+        const content = await readFile(fullPath);
+        const ext = extname(filePath).toLowerCase();
+        const contentType = mimeTypes[ext] || "application/octet-stream";
+
+        // 静态资源缓存策略
+        let cacheControl = "no-cache";
+        if (ext === ".js" || ext === ".css" || ext === ".woff2") {
+          // 带 hash 的资源可以长缓存
+          if (filePath.includes(".") && /\.[a-f0-9]{8,}\./.test(filePath)) {
+            cacheControl = "public, max-age=31536000, immutable";
+          }
+        }
+
+        return new Response(content, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": cacheControl,
+          },
+        });
+      } catch {
+        // 文件不存在 → SPA 回退: 返回 index.html
+        const indexPath = join(webRoot, "index.html");
+        try {
+          const indexContent = await readFile(indexPath);
+          return new Response(indexContent, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          });
+        } catch {
+          // index.html 也不存在 → Web UI 未构建
+          return c.json(
+            {
+              error: "Web UI not available",
+              detail: "Run 'pnpm build:web' to build the admin panel",
+            },
+            404,
+          );
+        }
+      }
+    } catch (err) {
+      log.error("Static file serving error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return c.json({ error: "Internal server error" }, 500);
+    }
+  });
+
   return app;
 }
 
@@ -431,6 +558,14 @@ export async function startHttpShell(container: AppContainer): Promise<void> {
         const error = err instanceof Error ? err : new Error(String(err));
         log.error("Failed to close banManager", { error: error.message });
         shutdownErrors.push({ service: "banManager", error });
+      }
+
+      try {
+        container.auth.close();
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        log.error("Failed to close auth service", { error: error.message });
+        shutdownErrors.push({ service: "auth", error });
       }
 
       if (shutdownErrors.length > 0) {

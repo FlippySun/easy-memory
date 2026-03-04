@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-07-06
+
+### Added
+
+- **[Phase 3] Web UI Admin Panel**: 完整的前端管理面板
+  - **登录系统**: 用户名/密码登录，JWT 会话管理 (2小时过期)
+  - **Dashboard**: 实时总览 — 请求量、成功率、平均延迟、系统状态
+  - **API Keys 管理**: 创建 / 查看 / 启用 / 禁用 / 删除 API 密钥
+  - **Ban 管理**: IP / Key 封禁创建 / 查看 / 解除
+  - **Analytics 页面**: 请求时间线、操作分布柱状图、错误追踪 (支持 24h/7d/30d 时间范围切换)
+  - **Audit Logs**: 审计日志浏览器 (分页 + 按操作/结果筛选)
+  - **User Management**: 用户创建 / 角色切换 / 启用禁用 / 删除 (仅 admin)
+  - **Settings**: 运行时配置可视化编辑 + 重置
+
+- **[Phase 3] Auth 认证服务**: 零外部依赖的用户认证
+  - `AuthService`: 用户 CRUD + 密码哈希 (scrypt, N=16384) + JWT 签发/验证 (HMAC-SHA256)
+  - JWT 密钥从 `ADMIN_TOKEN` 安全派生 (HKDF-like)
+  - Admin 用户种子: 通过 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 环境变量自动创建
+  - Auth API: `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/register`, `GET /api/auth/users`, `PATCH / DELETE /api/auth/users/:id`
+
+- **[Phase 3] RBAC 权限系统**: 基于角色的访问控制
+  - `admin`: 全部权限 (用户管理/Key管理/Ban管理/配置修改/分析/审计)
+  - `user`: 只读权限 (分析查看/审计查看/记忆操作)
+  - 前端路由级权限守卫 (`PermissionGuard`)
+
+- **[Phase 3] SPA 静态文件服务**: Hono 提供 Web UI 静态文件
+  - 自动 SPA 路由: 非 API 路径回退到 `index.html`
+  - 智能缓存: 带 hash 的静态资源长缓存，HTML 无缓存
+  - 安全: 目录穿越防护
+
+### Stack
+
+- **前端**: React 19 + Vite 6 + Tailwind CSS 4 + Lucide React + React Router 7
+- **后端认证**: Node.js `crypto` 模块 (零新生产依赖)
+- **构建**: `pnpm build:all` = 后端 tsc + 前端 vite build → `dist/web/`
+
+### Tests
+
+- 新增 `tests/services/auth.test.ts` (42 测试用例)
+  - 密码哈希/验证、JWT 签发/验证/过期/篡改检测
+  - AuthService CRUD: 登录/注册/更新/删除/RBAC
+  - Admin 种子、最后一个 admin 删除保护
+- 新增 `tests/types/auth-schema.test.ts` (14 测试用例)
+  - 所有 Zod Schema 验证: Login/Register/UpdateUser/UserRole
+  - ROLE_PERMISSIONS 结构完整性验证
+- 总计: **32 文件, 845 测试用例全部通过**
+
+### Security
+
+- **[CRITICAL] 空 ADMIN_TOKEN JWT 伪造漏洞修复**: 当 `ADMIN_TOKEN` 为空字符串时，`deriveJwtSecret("")` 产生可预测的 HMAC-SHA256 密钥。攻击者可伪造 `sub:0` JWT token 绕过用户验证获取 admin 权限。修复：`jwtAuth` 中间件在 `adminToken` 为空时直接返回 503，拒绝所有认证请求。
+- **[CRITICAL] deleteUser() 最后管理员保护绕过修复**: `deleteUser()` 中管理员计数查询未过滤 `is_active = 0` 的已禁用用户，可能导致唯一活跃管理员被删除。修复：添加 `AND is_active = 1` 条件。
+- **[IMPORTANT] Auth 路由双重速率限制修复**: `/api/auth/*` 路由同时受全局速率限制器和自有登录限制器约束，导致限制过于严格。修复：全局速率限制器跳过 `/api/auth` 路径。
+- **[IMPORTANT] Auth 路由双重审计记录修复**: `/api/auth/*` 路由同时被全局审计中间件和 `recordAuthAudit()` 记录，导致每次认证操作产生重复审计条目。修复：全局审计中间件跳过 `/api/auth` 路径。
+
+### Fixed
+
+- **Analytics 竞态条件修复**: 快速切换 timeRange 时，旧的 `Promise.all` 响应可能覆盖新数据。修复：引入 `AbortController` 和 `useRef`，切换时取消前一个请求。
+- **登录权限闪烁修复**: 登录后 `permissions` 初始为空数组导致非 admin 用户短暂显示"无权限"。修复：在设置 `isAuthenticated` 前先获取完整权限，原子化更新状态。
+- **Modal ESC 键支持**: 模态框现在支持 Escape 键关闭。
+- **Analytics / AuditLogs 静默错误修复**: 数据加载失败时不再静默吞咽错误，改为显示错误提示信息。
+
 ## [0.3.0] - 2025-07-05
 
 ### Added
