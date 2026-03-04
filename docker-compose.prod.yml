@@ -33,6 +33,8 @@ services:
       - GEMINI_REGION=${GEMINI_REGION:-us-central1}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - HTTP_HOST=0.0.0.0
       - HTTP_PORT=3080
       - TRUST_PROXY=true

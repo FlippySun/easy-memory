@@ -29,6 +29,9 @@ services:
       - GEMINI_PROJECT_ID=${GEMINI_PROJECT_ID:-}
       - GEMINI_REGION=${GEMINI_REGION:-us-central1}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-dev-token-change-me}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - HTTP_HOST=0.0.0.0
       - HTTP_PORT=3080
       - TRUST_PROXY=${TRUST_PROXY:-false}
