@@ -21,10 +21,14 @@ export function SettingsPage() {
     try {
       const res = await adminApi.getConfig();
       setConfig(res);
-      // Convert config to string form fields
+      // Backend returns { effective: {...}, defaults: {...}, overrides: {...} }
+      // Use 'effective' as the editable config — it's the flat key-value map
+      const configObj = ((res as Record<string, unknown>).effective ??
+        res) as Record<string, unknown>;
       const formData: Record<string, string> = {};
-      const configObj = (res.config ?? res) as Record<string, unknown>;
       for (const [key, val] of Object.entries(configObj)) {
+        // Skip nested objects — only show primitive values
+        if (val !== null && typeof val === "object") continue;
         formData[key] = String(val ?? "");
       }
       setForm(formData);

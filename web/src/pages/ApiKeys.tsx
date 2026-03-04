@@ -36,7 +36,7 @@ export function ApiKeysPage() {
   const fetchKeys = useCallback(async () => {
     try {
       const res = await adminApi.listKeys();
-      setKeys(res.keys);
+      setKeys(res.data ?? []);
     } catch {
       setToast({ message: "Failed to load API keys", type: "error" });
     } finally {

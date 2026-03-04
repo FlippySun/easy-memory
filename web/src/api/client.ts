@@ -212,7 +212,7 @@ export interface BanRecord {
 export const adminApi = {
   // Keys
   listKeys: () =>
-    api.get<{ keys: ApiKeyRecord[]; total: number }>("/admin/keys"),
+    api.get<{ data: ApiKeyRecord[]; pagination: { total_count: number } }>("/admin/keys"),
   createKey: (data: {
     name: string;
     scopes?: string;
@@ -232,7 +232,8 @@ export const adminApi = {
     api.delete<{ success: boolean }>(`/admin/keys/${id}`),
 
   // Bans
-  listBans: () => api.get<{ bans: BanRecord[]; total: number }>("/admin/bans"),
+  listBans: () =>
+    api.get<{ data: BanRecord[]; pagination: { total_count: number } }>("/admin/bans"),
   createBan: (data: {
     target_type: string;
     target_value: string;

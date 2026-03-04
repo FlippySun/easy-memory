@@ -45,3 +45,4 @@ coverage/
 # Planning (ephemeral)
 .planning/
 .continue-here.md
+.remaining-tasks.md

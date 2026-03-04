@@ -31,7 +31,7 @@ export function BansPage() {
   const fetchBans = useCallback(async () => {
     try {
       const res = await adminApi.listBans();
-      setBans(res.bans);
+      setBans(res.data ?? []);
     } catch {
       setToast({ message: "Failed to load bans", type: "error" });
     } finally {
