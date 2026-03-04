@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2025-07-08
+
+### Added
+
+- **[Infra] DATA_DIR 数据持久化**: 解决 Docker 容器重启后 SQLite 数据丢失问题
+  - 新增 `src/utils/paths.ts`: 集中管理所有持久化文件路径 (`getDataDir()` + `DATA_PATHS`)
+  - 6 个服务模块迁移: `api-key-manager`, `ban-manager`, `analytics`, `audit`, `runtime-config`, `logger` 全部使用 `DATA_PATHS`
+  - Dockerfile: 创建 `/data` 目录并设置正确权限
+  - docker-compose: 新增 `easy_memory_data:/data` Volume 映射
+  - `DATA_DIR` 环境变量: Docker 中设为 `/data`，本地默认 `$HOME`
+
+- **[MCP] Server Card 端点**: `/.well-known/mcp/server-card.json`
+  - 无需认证的公开端点，返回服务元数据和 4 个 Tool 的完整 inputSchema
+  - 支持 Smithery.ai 等 MCP 平台自动发现服务能力
+
+- **[Config] MCP 平台注册配置文件**:
+  - `smithery-config-schema.json`: Smithery stdio 模式环境变量 JSON Schema
+  - `mcp-config-template.json`: mcp.so 提交表单的服务器配置模板
+
+### Changed
+
+- **package.json**: 丰富 `description` 和 `keywords` (新增 `mcp-server`, `persistent-memory`, `gemini`, `copilot`, `bm25`, `hybrid-search`, `semantic-search`)
+
+### Docs
+
+- **README.md**: 大幅扩充
+  - 新增「远程代理模式」章节 (`EASY_MEMORY_TOKEN` + `EASY_MEMORY_URL`)
+  - 新增「MCP Streamable HTTP 模式」章节 (直连远端 `/mcp`)
+  - 扩充前置条件: Qdrant + Ollama 详细启动步骤与验证命令
+  - 新增可选 Gemini Embedding 配置指南
+  - 修复: 所有 SSE `/sse` 引用 → Streamable HTTP `/mcp`
+  - 环境变量表新增: `DATA_DIR`, `EASY_MEMORY_TOKEN`, `EASY_MEMORY_URL`
+  - 项目结构新增: `paths.ts`, `remote-server.ts`
+- **USER_GUIDE.md**: 全面更新
+  - 新增「方案 C: 远程代理模式」(最简部署方案)
+  - 所有客户端远程配置: SSE `/sse` → Streamable HTTP `/mcp`
+  - Claude Desktop 远程: "暂不支持" → 远程代理模式完整配置
+  - JetBrains IDE: SSE → Streamable HTTP
+  - FAQ 更新: Docker 数据持久化、Claude Desktop 远程连接
+- **RELEASE_CHECKLIST.md**: 新增 Section 8「MCP 平台注册」(Smithery/Glama/mcp.so 完整发布流程)
+
+### Tests
+
+- 新增 `tests/utils/paths.test.ts`: 6 项路径管理测试
+- 新增 server-card 端点测试 (`tests/api/server.test.ts`)
+- 总计: **33 文件, 852 测试用例全部通过**
+
 ## [0.5.1] - 2025-07-07
 
 ### Fixed

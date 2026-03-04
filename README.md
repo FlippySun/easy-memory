@@ -4,6 +4,7 @@
 [![Docker](https://img.shields.io/docker/v/thj8632/easy-memory?label=docker)](https://hub.docker.com/r/thj8632/easy-memory)
 [![CI](https://github.com/FlippySun/easy-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/FlippySun/easy-memory/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![smithery badge](https://smithery.ai/badge/FlippySun/easy-memory)](https://smithery.ai/servers/FlippySun/easy-memory)
 
 > **让 AI 跨会话、跨项目持久化记忆。** 基于 Qdrant 向量数据库 + Ollama/Gemini Embedding 的 MCP 记忆服务。
 
@@ -31,25 +32,73 @@ Easy Memory 提供双 Shell 架构：
 
 ### 前置条件
 
-| 依赖    | 版本 | 说明                 |
-| ------- | ---- | -------------------- |
-| Node.js | ≥ 20 | 运行 MCP Server      |
-| Docker  | ≥ 24 | 运行 Qdrant + Ollama |
+| 依赖    | 版本 | 说明                                       |
+| ------- | ---- | ------------------------------------------ |
+| Node.js | ≥ 20 | 运行 MCP Server                            |
+| Docker  | ≥ 24 | 运行 Qdrant + Ollama（或使用远程模式跳过） |
+
+> **💡 远程代理模式无需本地 Qdrant/Ollama**  
+> 如果你有远端 Easy Memory 服务（如 `memory.zhiz.chat`），只需设置 `EASY_MEMORY_TOKEN` 和 `EASY_MEMORY_URL` 即可。参见 [远程代理模式](#远程代理模式推荐--无需本地-qdrantollama)。
+
+### 基础服务准备（Qdrant + Ollama）
+
+Easy Memory 依赖两个基础服务：**Qdrant**（向量数据库）和 **Ollama**（本地 Embedding 模型）。
+
+```bash
+# 1. 启动 Qdrant 向量数据库
+docker run -d --name qdrant \
+  -p 6333:6333 \
+  -v qdrant_data:/qdrant/storage \
+  -e QDRANT__SERVICE__API_KEY=your-api-key \
+  qdrant/qdrant:latest
+
+# 验证 Qdrant 运行正常
+curl http://localhost:6333/healthz
+# 应返回: OK
+
+# 2. 启动 Ollama（本地 AI 模型推理引擎）
+docker run -d --name ollama \
+  -p 11434:11434 \
+  -v ollama_data:/root/.ollama \
+  ollama/ollama:latest
+
+# 3. 拉取 bge-m3 Embedding 模型（约 1.2GB，首次需等待）
+docker exec ollama ollama pull bge-m3
+
+# 验证 Ollama 运行正常
+curl http://localhost:11434/api/tags
+# 应返回包含 "bge-m3" 的模型列表
+```
+
+> **⚠️ 注意事项：**
+>
+> - `QDRANT__SERVICE__API_KEY` 是 Qdrant 的认证密钥，后续配置中需跟 `QDRANT_API_KEY` 保持一致
+> - bge-m3 模型首次加载约需 2GB 内存，低配机器可能较慢
+> - Ollama 默认监听 `0.0.0.0:11434`，生产环境建议限制到 `127.0.0.1`
+
+### 可选：配置 Google Gemini 远端 Embedding
+
+如果你需要更高质量的向量或本地资源不足，可以启用 Gemini Embedding（Google Cloud Vertex AI）：
+
+1. 前往 [Google AI Studio](https://aistudio.google.com/apikey) 获取 API Key
+2. 在 [Google Cloud Console](https://console.cloud.google.com/) 创建项目并启用 `aiplatform.googleapis.com`
+3. 设置环境变量：
+
+```bash
+EMBEDDING_PROVIDER=auto    # auto = Gemini 优先，Ollama 自动兜底
+GEMINI_API_KEY=AIzaSy...   # Google AI Studio API Key
+GEMINI_PROJECT_ID=my-gcp-project  # Google Cloud Project ID
+GEMINI_REGION=us-central1  # 可选，默认 us-central1
+```
+
+> `auto` 模式下，Gemini 请求失败（限流/超时）会自动降级到 Ollama，确保服务不中断。
 
 ### 方式一：npx 直接运行（MCP 模式）
 
 ```bash
-# 1. 启动 Qdrant + Ollama
-docker run -d --name qdrant -p 6333:6333 -v qdrant_data:/qdrant/storage \
-  -e QDRANT__SERVICE__API_KEY=your-api-key qdrant/qdrant:latest
+# 前提：Qdrant 和 Ollama 已按上方步骤启动
 
-docker run -d --name ollama -p 11434:11434 -v ollama_data:/root/.ollama \
-  ollama/ollama:latest
-
-# 2. 拉取 bge-m3 模型
-docker exec ollama ollama pull bge-m3
-
-# 3. 通过 npx 启动 MCP Server
+# 通过 npx 启动 MCP Server
 npx easy-memory
 ```
 
@@ -134,6 +183,54 @@ EASY_MEMORY_MODE=http HTTP_AUTH_TOKEN=your-token node dist/index.js
         "QDRANT_URL": "http://localhost:6333",
         "QDRANT_API_KEY": "your-api-key",
         "OLLAMA_BASE_URL": "http://localhost:11434"
+      }
+    }
+  }
+}
+```
+
+### 远程代理模式（推荐 — 无需本地 Qdrant/Ollama）
+
+当你有一台运行 Easy Memory HTTP 服务的远程服务器时，本地客户端可通过**远程代理模式**直接对接远端服务，**无需本地安装 Qdrant 或 Ollama**。
+
+> 需要先在远端 Admin 面板创建 API Key（参见 [VPS 生产部署 → 用户管理](#4-用户管理)）。
+
+**Claude Desktop / Cursor / VS Code — stdio 代理模式：**
+
+```json
+{
+  "mcpServers": {
+    "easy-memory": {
+      "command": "npx",
+      "args": ["-y", "easy-memory@latest"],
+      "env": {
+        "EASY_MEMORY_TOKEN": "em_your-api-key",
+        "EASY_MEMORY_URL": "https://memory.zhiz.chat"
+      }
+    }
+  }
+}
+```
+
+仅需设置两个环境变量，npm 包会自动切换为远程代理模式：
+
+- `EASY_MEMORY_TOKEN` — 远端 API Key（从 Admin 面板获取）
+- `EASY_MEMORY_URL` — 远端服务地址
+
+### MCP Streamable HTTP 模式（直连远端）
+
+支持 Streamable HTTP 的客户端可以直接连接远端 MCP 端点，无需 stdio 代理：
+
+**VS Code / Cursor — HTTP 直连：**
+
+```json
+{
+  "servers": {
+    "easy-memory": {
+      "type": "http",
+      "url": "https://memory.zhiz.chat/mcp",
+      "headers": {
+        "Authorization": "Bearer em_your-api-key"
       }
     }
   }
@@ -381,7 +478,7 @@ curl -X POST https://memory.example.com/api/admin/keys \
 # ⚠️ key 仅此一次返回，请安全保存并发给用户
 ```
 
-#### 用户配置远程 MCP（SSE 模式）
+#### 用户配置远程 MCP（Streamable HTTP 模式）
 
 VS Code / Cursor — 编辑 `.vscode/mcp.json`：
 
@@ -389,8 +486,8 @@ VS Code / Cursor — 编辑 `.vscode/mcp.json`：
 {
   "servers": {
     "easy-memory": {
-      "type": "sse",
-      "url": "https://memory.example.com/sse",
+      "type": "http",
+      "url": "https://memory.example.com/mcp",
       "headers": {
         "Authorization": "Bearer em_abc123..."
       }
@@ -405,14 +502,14 @@ JetBrains IDE — 添加 MCP Server：
 {
   "mcpServers": {
     "easy-memory": {
-      "url": "https://memory.example.com/sse",
+      "url": "https://memory.example.com/mcp",
       "headers": { "Authorization": "Bearer em_abc123..." }
     }
   }
 }
 ```
 
-> **Note:** Claude Desktop 不原生支持 SSE 远端连接，需使用本地 stdio 桥接。
+> **Note:** Claude Desktop 不原生支持 HTTP 远端连接，需使用远程代理模式（`npx` + `EASY_MEMORY_TOKEN`）。参见 [远程代理模式](#远程代理模式推荐--无需本地-qdrantollama)。
 
 ### 5. Admin API
 
@@ -466,9 +563,12 @@ Authorization: Bearer <ADMIN_TOKEN>
 | `ADMIN_TOKEN`           | —                        | Admin API Token（留空则禁用管理后台）                      |
 | `ADMIN_USERNAME`        | —                        | Admin 用户名 — 首次启动时自动创建管理员账户                |
 | `ADMIN_PASSWORD`        | —                        | Admin 密码 — 与 ADMIN_USERNAME 配合使用                    |
+| `DATA_DIR`              | `$HOME`                  | 数据文件存储目录（Docker 中设为 `/data` 并挂载 Volume）    |
 | `RATE_LIMIT_PER_MINUTE` | `60`                     | 全局速率限制（次/分钟）                                    |
 | `GEMINI_MAX_PER_HOUR`   | `200`                    | Gemini 每小时最大调用数                                    |
 | `GEMINI_MAX_PER_DAY`    | `2000`                   | Gemini 每日最大调用数                                      |
+| `EASY_MEMORY_TOKEN`     | —                        | 远程代理模式：API Key（设置后启用远程代理，跳过本地服务）  |
+| `EASY_MEMORY_URL`       | —                        | 远程代理模式：远端 Easy Memory 服务 URL                    |
 
 ---
 
@@ -504,7 +604,7 @@ GEMINI_REGION=us-central1          # 可选，默认 us-central1
 pnpm install          # 安装依赖
 pnpm build            # TypeScript 编译
 pnpm typecheck        # 类型检查
-pnpm test             # 单元测试 (842 tests)
+pnpm test             # 单元测试 (850+ tests)
 pnpm build:web        # 构建 Web UI 前端
 pnpm build:all        # 构建后端 + 前端
 pnpm dev:web          # 前端开发模式 (HMR)
@@ -525,7 +625,8 @@ src/
 │   ├── schemas.ts
 │   └── middlewares.ts    # 双层鉴权 (Master + API Key)
 ├── mcp/                  # MCP Shell (stdio)
-│   └── server.ts
+│   ├── server.ts         # 本地 MCP Server (stdio + Streamable HTTP)
+│   └── remote-server.ts  # 远程代理 MCP Server (EASY_MEMORY_TOKEN)
 ├── services/             # 核心服务
 │   ├── qdrant.ts         # Qdrant 向量数据库
 │   ├── embedding.ts      # Embedding 编排 (多引擎 fallback)
@@ -552,6 +653,7 @@ src/
 └── utils/                # 工具
     ├── hash.ts           # SHA-256 去重
     ├── logger.ts         # stderr JSON 日志
+    ├── paths.ts          # 数据文件路径管理 (DATA_DIR)
     ├── sanitize.ts       # 内容脱敏
     ├── rate-limiter.ts   # 速率限制 (全局 + Per-Key)
     ├── ip.ts             # 代理感知 IP 提取
