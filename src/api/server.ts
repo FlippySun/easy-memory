@@ -408,6 +408,142 @@ function createApp(container: AppContainer): Hono<Env> {
     return c.json({ status: "ok", mode: "http" });
   });
 
+  // ===== MCP Server Card — 公开元数据 (Smithery / MCP 平台扫描用) =====
+  app.get("/.well-known/mcp/server-card.json", (c) => {
+    return c.json({
+      serverInfo: {
+        name: "easy-memory",
+        version: "0.6.0",
+      },
+      authentication: {
+        required: true,
+        schemes: ["bearer"],
+      },
+      tools: [
+        {
+          name: "memory_save",
+          description:
+            "Save a memory to the vector store. Use this to persist important facts, decisions, code patterns, or any information worth remembering across sessions.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              content: {
+                type: "string",
+                description: "The content to save as a memory",
+              },
+              project: {
+                type: "string",
+                description:
+                  "Project identifier (defaults to configured project)",
+              },
+              source: {
+                type: "string",
+                enum: ["conversation", "file_watch", "manual"],
+                description: "How this memory was captured",
+              },
+              fact_type: {
+                type: "string",
+                enum: [
+                  "verified_fact",
+                  "decision",
+                  "hypothesis",
+                  "discussion",
+                  "observation",
+                ],
+                description: "Classification of the memory",
+              },
+              tags: {
+                type: "array",
+                items: { type: "string" },
+                description: "Tags for categorization",
+              },
+              confidence: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+                description: "Confidence level (0-1)",
+              },
+            },
+            required: ["content"],
+          },
+        },
+        {
+          name: "memory_search",
+          description:
+            "Search for relevant memories using semantic similarity. Returns memories wrapped in boundary markers for prompt injection safety.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Search query text" },
+              project: { type: "string", description: "Project identifier" },
+              limit: {
+                type: "number",
+                minimum: 1,
+                maximum: 20,
+                description: "Maximum results (default: 5)",
+              },
+              threshold: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+                description: "Minimum similarity score (default: 0.55)",
+              },
+              include_outdated: {
+                type: "boolean",
+                description: "Include outdated memories",
+              },
+              tags: {
+                type: "array",
+                items: { type: "string" },
+                description: "Filter by tags",
+              },
+            },
+            required: ["query"],
+          },
+        },
+        {
+          name: "memory_forget",
+          description:
+            "Archive or mark a memory as outdated (soft delete). The 'delete' action is downgraded to 'archive' for safety.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                description: "Memory UUID to forget",
+              },
+              action: {
+                type: "string",
+                enum: ["archive", "outdated", "delete"],
+                description: "Forget action type",
+              },
+              reason: {
+                type: "string",
+                description: "Reason for forgetting",
+              },
+              project: { type: "string", description: "Project identifier" },
+            },
+            required: ["id", "action", "reason"],
+          },
+        },
+        {
+          name: "memory_status",
+          description:
+            "Check the health status of the memory system (Qdrant, Embedding service, collection info).",
+          inputSchema: {
+            type: "object",
+            properties: {
+              project: { type: "string", description: "Project identifier" },
+            },
+          },
+        },
+      ],
+      resources: [],
+      prompts: [],
+    });
+  });
+
   // ===== POST /api/save =====
   app.post("/api/save", async (c) => {
     const body = await c.req.json();

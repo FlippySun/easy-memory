@@ -92,38 +92,32 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     analytics: {
       isReady: true,
       recordEvent: vi.fn(),
-      queryEvents: vi
-        .fn()
-        .mockReturnValue({
-          data: [],
-          pagination: {
-            page: 1,
-            page_size: 50,
-            total_count: 0,
-            total_pages: 0,
-          },
-        }),
+      queryEvents: vi.fn().mockReturnValue({
+        data: [],
+        pagination: {
+          page: 1,
+          page_size: 50,
+          total_count: 0,
+          total_pages: 0,
+        },
+      }),
       queryRollups: vi.fn().mockReturnValue([]),
       exportEvents: vi.fn().mockReturnValue([]),
       getUserUsage: vi.fn().mockReturnValue([]),
       getProjectUsage: vi.fn().mockReturnValue([]),
-      getErrorRate: vi
-        .fn()
-        .mockReturnValue({
-          total_requests: 0,
-          error_count: 0,
-          error_rate: 0,
-          rate_limited_count: 0,
-          rejected_count: 0,
-        }),
-      getHitRate: vi
-        .fn()
-        .mockReturnValue({
-          total_searches: 0,
-          hit_count: 0,
-          miss_count: 0,
-          hit_rate: 0,
-        }),
+      getErrorRate: vi.fn().mockReturnValue({
+        total_requests: 0,
+        error_count: 0,
+        error_rate: 0,
+        rate_limited_count: 0,
+        rejected_count: 0,
+      }),
+      getHitRate: vi.fn().mockReturnValue({
+        total_searches: 0,
+        hit_count: 0,
+        miss_count: 0,
+        hit_rate: 0,
+      }),
       runAggregation: vi.fn().mockResolvedValue(undefined),
       close: vi.fn(),
     } as any,
@@ -134,33 +128,29 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
       getKeyById: vi.fn(),
       getKeyByHash: vi.fn(),
       validateKey: vi.fn(),
-      listKeys: vi
-        .fn()
-        .mockReturnValue({
-          data: [],
-          pagination: {
-            page: 1,
-            page_size: 20,
-            total_count: 0,
-            total_pages: 0,
-          },
-        }),
+      listKeys: vi.fn().mockReturnValue({
+        data: [],
+        pagination: {
+          page: 1,
+          page_size: 20,
+          total_count: 0,
+          total_pages: 0,
+        },
+      }),
       updateKey: vi.fn(),
       revokeKey: vi.fn(),
       rotateKey: vi.fn(),
       recordUsage: vi.fn(),
       recordAdminAction: vi.fn(),
-      listAdminActions: vi
-        .fn()
-        .mockReturnValue({
-          data: [],
-          pagination: {
-            page: 1,
-            page_size: 50,
-            total_count: 0,
-            total_pages: 0,
-          },
-        }),
+      listAdminActions: vi.fn().mockReturnValue({
+        data: [],
+        pagination: {
+          page: 1,
+          page_size: 50,
+          total_count: 0,
+          total_pages: 0,
+        },
+      }),
       hashKey: vi.fn().mockReturnValue("mocked-hash"),
     } as any,
     banManager: {
@@ -169,17 +159,15 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
       createBan: vi.fn(),
       removeBan: vi.fn(),
       getBanById: vi.fn(),
-      listBans: vi
-        .fn()
-        .mockReturnValue({
-          data: [],
-          pagination: {
-            page: 1,
-            page_size: 20,
-            total_count: 0,
-            total_pages: 0,
-          },
-        }),
+      listBans: vi.fn().mockReturnValue({
+        data: [],
+        pagination: {
+          page: 1,
+          page_size: 20,
+          total_count: 0,
+          total_pages: 0,
+        },
+      }),
       isKeyBanned: vi.fn().mockReturnValue({ banned: false }),
       isIpBanned: vi.fn().mockReturnValue({ banned: false }),
     } as any,
@@ -225,6 +213,27 @@ describe("HTTP API Server", () => {
       const body = await res.json();
       expect(body.status).toBe("ok");
       expect(body.mode).toBe("http");
+    });
+  });
+
+  // ===== MCP Server Card =====
+
+  describe("GET /.well-known/mcp/server-card.json", () => {
+    it("should return server metadata without auth", async () => {
+      const app = createApp(container);
+      const res = await app.request("/.well-known/mcp/server-card.json");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.serverInfo.name).toBe("easy-memory");
+      expect(body.serverInfo.version).toBeDefined();
+      expect(body.authentication.required).toBe(true);
+      expect(body.tools).toBeInstanceOf(Array);
+      expect(body.tools.length).toBe(4);
+      const toolNames = body.tools.map((t: any) => t.name);
+      expect(toolNames).toContain("memory_save");
+      expect(toolNames).toContain("memory_search");
+      expect(toolNames).toContain("memory_forget");
+      expect(toolNames).toContain("memory_status");
     });
   });
 

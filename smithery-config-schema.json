@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "QDRANT_URL": {
+      "type": "string",
+      "description": "Qdrant vector database URL",
+      "default": "http://localhost:6333",
+      "x-from": "env"
+    },
+    "QDRANT_API_KEY": {
+      "type": "string",
+      "description": "Qdrant API key for authentication",
+      "x-from": "env"
+    },
+    "OLLAMA_BASE_URL": {
+      "type": "string",
+      "description": "Ollama API base URL for local embedding (bge-m3 model)",
+      "default": "http://localhost:11434",
+      "x-from": "env"
+    },
+    "EMBEDDING_PROVIDER": {
+      "type": "string",
+      "description": "Embedding provider: 'ollama' (local, free), 'gemini' (Google cloud), or 'auto' (Ollama first, Gemini fallback)",
+      "enum": ["ollama", "gemini", "auto"],
+      "default": "ollama",
+      "x-from": "env"
+    },
+    "GEMINI_API_KEY": {
+      "type": "string",
+      "description": "Google Gemini API key (required if EMBEDDING_PROVIDER is 'gemini' or 'auto')",
+      "x-from": "env"
+    },
+    "DEFAULT_PROJECT": {
+      "type": "string",
+      "description": "Default project identifier for memory isolation",
+      "default": "default",
+      "x-from": "env"
+    }
+  },
+  "required": ["QDRANT_URL", "QDRANT_API_KEY"]
+}

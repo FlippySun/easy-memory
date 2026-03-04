@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "easy-memory": {
+      "command": "npx",
+      "args": ["-y", "easy-memory@latest"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333",
+        "QDRANT_API_KEY": "your-qdrant-api-key",
+        "OLLAMA_BASE_URL": "http://localhost:11434",
+        "EMBEDDING_PROVIDER": "ollama",
+        "DEFAULT_PROJECT": "default"
+      }
+    }
+  }
+}
