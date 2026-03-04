@@ -83,8 +83,9 @@ function hijackConsole(): void {
 
 /**
  * 注册所有 MCP Tools 到 McpServer 实例。
+ * @public — 同时被 stdio transport 和 HTTP transport 使用
  */
-function registerTools(server: McpServer, container: AppContainer): void {
+export function registerTools(server: McpServer, container: AppContainer): void {
   const { qdrant, embedding, rateLimiter } = container;
   const defaultProject = container.config.defaultProject;
 

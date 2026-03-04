@@ -55,6 +55,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly string[]> = {
     "memory:search",
     "memory:forget",
     "memory:status",
+    // User self-service API Key
+    "keys:self",
   ],
   user: [
     "analytics:read",
@@ -63,6 +65,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly string[]> = {
     "memory:search",
     "memory:forget",
     "memory:status",
+    // 用户自助 API Key 管理
+    "keys:self",
   ],
 } as const;
 
@@ -113,7 +117,13 @@ export const RegisterInputSchema = z.object({
       /^[a-zA-Z0-9_-]+$/,
       "Username can only contain letters, numbers, underscores and hyphens",
     ),
-  password: z.string().min(6).max(128),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(128)
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one digit"),
 });
 export type RegisterInput = z.infer<typeof RegisterInputSchema>;
 

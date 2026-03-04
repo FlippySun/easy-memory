@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   scopes TEXT NOT NULL DEFAULT '[]',
   metadata TEXT NOT NULL DEFAULT '{}',
   total_requests INTEGER NOT NULL DEFAULT 0,
-  created_by TEXT NOT NULL DEFAULT 'system'
+  created_by TEXT NOT NULL DEFAULT 'system',
+  user_id INTEGER
 );
 
 -- Admin action audit trail
@@ -76,6 +77,14 @@ CREATE INDEX IF NOT EXISTS idx_keys_prefix ON api_keys(prefix);
 CREATE INDEX IF NOT EXISTS idx_keys_revoked ON api_keys(revoked_at);
 CREATE INDEX IF NOT EXISTS idx_admin_actions_ts ON admin_actions(timestamp);
 CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions(action);
+`;
+
+/** 向后兼容迁移 — 为已有数据库添加 user_id 列 */
+const MIGRATION_ADD_USER_ID = `
+ALTER TABLE api_keys ADD COLUMN user_id INTEGER;
+`;
+const MIGRATION_ADD_USER_ID_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_keys_user_id ON api_keys(user_id);
 `;
 
 // =========================================================================
@@ -136,6 +145,9 @@ export class ApiKeyManager {
       this.db.pragma("synchronous = NORMAL");
       this.db.exec(CREATE_TABLES_SQL);
 
+      // v0.6.0 向后兼容迁移 — 为已有数据库添加 user_id 列
+      this.migrateUserIdColumn();
+
       this.prepareStatements();
       this.loadCache();
 
@@ -148,6 +160,23 @@ export class ApiKeyManager {
         error: err instanceof Error ? err.message : String(err),
       });
       throw err;
+    }
+  }
+
+  /**
+   * 向后兼容迁移：如果 api_keys 表缺少 user_id 列，添加之。
+   * @internal
+   */
+  private migrateUserIdColumn(): void {
+    if (!this.db) return;
+    const columns = this.db
+      .prepare("PRAGMA table_info(api_keys)")
+      .all() as Array<{ name: string }>;
+    const hasUserId = columns.some((col) => col.name === "user_id");
+    if (!hasUserId) {
+      this.db.exec(MIGRATION_ADD_USER_ID);
+      this.db.exec(MIGRATION_ADD_USER_ID_INDEX);
+      log.info("Migration: added user_id column to api_keys table");
     }
   }
 
@@ -178,9 +207,14 @@ export class ApiKeyManager {
   /**
    * 创建新的 API Key。
    *
+   * @param userId 可选 — 关联创建此 key 的用户 ID (v0.6.0 用户自助管理)
    * @returns 包含明文 key 的响应 — ⚠️ key 仅此一次机会展示
    */
-  createKey(input: CreateApiKeyInput, createdBy: string): ApiKeyCreateResponse {
+  createKey(
+    input: CreateApiKeyInput,
+    createdBy: string,
+    userId?: number,
+  ): ApiKeyCreateResponse {
     this.ensureOpen();
 
     const id = randomUUID();
@@ -205,6 +239,7 @@ export class ApiKeyManager {
       metadata: JSON.stringify(input.metadata ?? {}),
       total_requests: 0,
       created_by: createdBy,
+      user_id: userId ?? null,
     };
 
     this.stmtInsertKey!.run(
@@ -221,6 +256,7 @@ export class ApiKeyManager {
       record.metadata,
       record.total_requests,
       record.created_by,
+      record.user_id,
     );
 
     // 更新缓存
@@ -475,6 +511,7 @@ export class ApiKeyManager {
         existing.metadata,
         0, // total_requests
         createdBy,
+        existing.user_id ?? null, // 继承 user_id
       );
     });
 
@@ -532,6 +569,104 @@ export class ApiKeyManager {
     } catch {
       // 静默失败 — 使用日志不应阻塞请求
     }
+  }
+
+  // =========================================================================
+  // User Self-Service API Key Management (v0.6.0)
+  // =========================================================================
+
+  /**
+   * 统计指定用户拥有的**活跃** API Key 数量。
+   */
+  countActiveKeysByUser(userId: number): number {
+    this.ensureOpen();
+    const result = this.db!.prepare(
+      "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = ? AND revoked_at IS NULL",
+    ).get(userId) as { cnt: number } | undefined;
+    return result?.cnt ?? 0;
+  }
+
+  /**
+   * 列出指定用户的 API Keys (含吊销的)。
+   */
+  listKeysByUser(
+    userId: number,
+  ): ApiKeyResponse[] {
+    this.ensureOpen();
+    const rows = this.db!.prepare(
+      "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+    ).all(userId) as ApiKeyRecord[];
+    return rows.map(toApiKeyResponse);
+  }
+
+  /**
+   * 为用户创建 API Key — 事务内检查 max 限制防竞态。
+   *
+   * @param maxKeys 每用户最大活跃 key 数 (默认 2)
+   * @throws Error 超出限制时抛出
+   */
+  createKeyForUser(
+    input: CreateApiKeyInput,
+    userId: number,
+    username: string,
+    maxKeys = 2,
+  ): ApiKeyCreateResponse {
+    this.ensureOpen();
+
+    // 事务内原子性检查+创建 — 防竞态
+    let result: ApiKeyCreateResponse | null = null;
+
+    const txn = this.db!.transaction(() => {
+      const count = (
+        this.db!.prepare(
+          "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = ? AND revoked_at IS NULL",
+        ).get(userId) as { cnt: number }
+      ).cnt;
+
+      if (count >= maxKeys) {
+        throw new Error(
+          `User already has ${count} active API keys (max: ${maxKeys})`,
+        );
+      }
+
+      // 使用已有的 createKey 方法
+      result = this.createKey(input, `user:${username}`, userId);
+    });
+
+    txn();
+
+    return result!;
+  }
+
+  /**
+   * 用户删除（吊销）自己的 API Key。
+   * 校验 key 的 user_id 是否匹配。
+   *
+   * @returns true 如果成功吊销
+   */
+  revokeKeyForUser(keyId: string, userId: number): boolean {
+    this.ensureOpen();
+
+    const record = this.stmtGetById!.get(keyId) as ApiKeyRecord | undefined;
+    if (!record) return false;
+    if (record.user_id !== userId) return false; // 权限检查
+    if (record.revoked_at) return false; // 已吊销
+
+    const now = new Date().toISOString();
+    this.stmtRevokeKey!.run(now, keyId);
+
+    // 更新缓存
+    const revoked = { ...record, revoked_at: now };
+    this.cache.set(record.key_hash, revoked);
+    this.cacheById.set(record.id, revoked);
+
+    log.info("User revoked own API key", {
+      keyId,
+      userId,
+      prefix: record.prefix,
+    });
+
+    return true;
   }
 
   // =========================================================================
@@ -628,8 +763,8 @@ export class ApiKeyManager {
       INSERT INTO api_keys (
         id, name, prefix, key_hash, created_at, expires_at,
         revoked_at, last_used_at, rate_limit_per_minute,
-        scopes, metadata, total_requests, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        scopes, metadata, total_requests, created_by, user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.stmtGetByHash = this.db!.prepare(

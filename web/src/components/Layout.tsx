@@ -4,6 +4,7 @@ import { useAuth } from "../contexts/auth";
 import {
   LayoutDashboard,
   Key,
+  KeyRound,
   ShieldBan,
   BarChart3,
   ScrollText,
@@ -25,6 +26,12 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
+  {
+    to: "/my-keys",
+    label: "My API Keys",
+    icon: <KeyRound size={20} />,
+    permission: "keys:self",
+  },
   {
     to: "/api-keys",
     label: "API Keys",

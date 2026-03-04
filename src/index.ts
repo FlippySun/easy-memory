@@ -18,9 +18,26 @@
 import { parseAppConfig, createContainer } from "./container.js";
 import { startMcpShell } from "./mcp/server.js";
 import { startHttpShell } from "./api/server.js";
+import { createRemoteMcpServer } from "./mcp/remote-server.js";
 import { log } from "./utils/logger.js";
 
 async function main(): Promise<void> {
+  // ⓪ 远程代理模式 — 当 EASY_MEMORY_TOKEN 设置时，跳过本地服务启动
+  const remoteToken = process.env.EASY_MEMORY_TOKEN;
+  if (remoteToken) {
+    const remoteUrl = process.env.EASY_MEMORY_URL;
+    if (!remoteUrl) {
+      process.stderr.write(
+        "[easy-memory] ERROR: EASY_MEMORY_URL is required when EASY_MEMORY_TOKEN is set.\n" +
+          "  Example: EASY_MEMORY_URL=https://memory.zhiz.chat\n",
+      );
+      process.exit(1);
+    }
+    log.info("Starting in remote proxy mode", { baseUrl: remoteUrl });
+    await createRemoteMcpServer(remoteToken, remoteUrl);
+    return; // 远程模式不需要本地容器
+  }
+
   // ① 解析配置
   const config = parseAppConfig();
 

@@ -171,6 +171,9 @@ export const authApi = {
   me: () => api.get<MeResponse>("/auth/me"),
   register: (username: string, password: string) =>
     api.post<{ user: UserRecord }>("/auth/register", { username, password }),
+  /** 公开自助注册 — 不需要 admin 权限 (v0.6.0) */
+  registerPublic: (username: string, password: string) =>
+    api.post<LoginResponse>("/auth/register-public", { username, password }),
   listUsers: () =>
     api.get<{ users: UserRecord[]; total: number }>("/auth/users"),
   updateUser: (
@@ -283,4 +286,42 @@ export const adminApi = {
 
   // Actions
   getActions: () => api.get<Record<string, unknown>>("/admin/actions"),
+};
+
+// =====================================================================
+// User Self-Service API Keys (v0.6.0)
+// =====================================================================
+
+export interface UserKeyRecord {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+  total_requests: number;
+  is_active: boolean;
+}
+
+export interface UserKeyCreateResponse {
+  id: string;
+  name: string;
+  prefix: string;
+  key: string; // 明文 key — 仅创建时展示一次
+  created_at: string;
+}
+
+export const userKeysApi = {
+  /** 列出当前用户的 API Keys */
+  list: () =>
+    api.get<{ keys: UserKeyRecord[]; total: number; max_keys: number }>(
+      "/user/keys",
+    ),
+  /** 创建新 API Key (每用户最多 2 个活跃 key) */
+  create: (name: string) =>
+    api.post<UserKeyCreateResponse>("/user/keys", { name }),
+  /** 吊销 API Key */
+  revoke: (id: string) =>
+    api.delete<{ success: boolean }>(`/user/keys/${id}`),
 };

@@ -54,13 +54,13 @@ describe("Auth Schemas", () => {
       expect(
         RegisterInputSchema.safeParse({
           username: "user-name_123",
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(true);
       expect(
         RegisterInputSchema.safeParse({
           username: "Admin",
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(true);
     });
@@ -69,44 +69,44 @@ describe("Auth Schemas", () => {
       expect(
         RegisterInputSchema.safeParse({
           username: "user name",
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(false);
       expect(
         RegisterInputSchema.safeParse({
           username: "user@name",
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(false);
       expect(
         RegisterInputSchema.safeParse({
           username: "用户",
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(false);
     });
 
     it("should enforce username length limits", () => {
       expect(
-        RegisterInputSchema.safeParse({ username: "a", password: "pass123456" })
+        RegisterInputSchema.safeParse({ username: "a", password: "Pass1234" })
           .success,
       ).toBe(false);
       expect(
         RegisterInputSchema.safeParse({
           username: "a".repeat(65),
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(false);
       expect(
         RegisterInputSchema.safeParse({
           username: "ab",
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(true);
       expect(
         RegisterInputSchema.safeParse({
           username: "a".repeat(64),
-          password: "pass123456",
+          password: "Pass1234",
         }).success,
       ).toBe(true);
     });

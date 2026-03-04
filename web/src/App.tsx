@@ -9,6 +9,8 @@ import { AnalyticsPage } from "./pages/Analytics";
 import { AuditLogsPage } from "./pages/AuditLogs";
 import { UsersPage } from "./pages/Users";
 import { SettingsPage } from "./pages/Settings";
+import RegisterPage from "./pages/Register";
+import MyKeysPage from "./pages/MyKeys";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -73,6 +75,10 @@ export function App() {
         path="/login"
         element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
       />
+      <Route
+        path="/register"
+        element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />}
+      />
 
       <Route
         element={
@@ -127,6 +133,14 @@ export function App() {
           element={
             <PermissionGuard permission="config:read">
               <SettingsPage />
+            </PermissionGuard>
+          }
+        />
+        <Route
+          path="/my-keys"
+          element={
+            <PermissionGuard permission="keys:self">
+              <MyKeysPage />
             </PermissionGuard>
           }
         />

@@ -17,6 +17,7 @@ interface AuthState {
 
 interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string) => Promise<void>;
   logout: () => void;
   hasPermission: (permission: string) => boolean;
   refreshUser: () => Promise<void>;
@@ -86,6 +87,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  /** 公开自助注册 — 注册成功后自动登录 (v0.6.0) */
+  const register = useCallback(async (username: string, password: string) => {
+    const res = await authApi.registerPublic(username, password);
+
+    // 注册接口自动设置了 JWT cookies，获取完整权限
+    let permissions: string[] = [];
+    try {
+      const me = await authApi.me();
+      permissions = me.permissions;
+    } catch {
+      // 权限获取失败以空数组兜底
+    }
+
+    setState({
+      user: res.user,
+      permissions,
+      isLoading: false,
+      isAuthenticated: true,
+    });
+  }, []);
+
   const logout = useCallback(async () => {
     // W3 FIX: 立即清除前端状态 — 防止 await 期间的幽灵请求
     setState({
@@ -112,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ ...state, login, logout, hasPermission, refreshUser }}
+      value={{ ...state, login, register, logout, hasPermission, refreshUser }}
     >
       {children}
     </AuthContext.Provider>

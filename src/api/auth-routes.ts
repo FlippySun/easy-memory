@@ -95,6 +95,12 @@ const ONE_MINUTE_MS = 60_000;
 /** 定期清理计数器 */
 let loginCleanupCounter = 0;
 
+/** 注册限流桶 (per IP) — 独立于登录限流 */
+const registerAttempts = new Map<string, number[]>();
+const MAX_REGISTER_ATTEMPTS_PER_HOUR = 5;
+const ONE_HOUR_MS = 3_600_000;
+let registerCleanupCounter = 0;
+
 /**
  * 检查 IP 是否超出登录限制。
  * @returns true 如果应被限流
@@ -125,6 +131,41 @@ function isLoginRateLimited(clientIp: string): boolean {
       const active = ts.filter((t) => now - t < ONE_MINUTE_MS);
       if (active.length === 0) {
         loginAttempts.delete(ip);
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 检查 IP 是否超出注册限制 (5次/小时/IP)。
+ * @returns true 如果应被限流
+ */
+function isRegisterRateLimited(clientIp: string): boolean {
+  const now = Date.now();
+  let timestamps = registerAttempts.get(clientIp);
+  if (!timestamps) {
+    timestamps = [];
+    registerAttempts.set(clientIp, timestamps);
+  }
+
+  const filtered = timestamps.filter((t) => now - t < ONE_HOUR_MS);
+  registerAttempts.set(clientIp, filtered);
+
+  if (filtered.length >= MAX_REGISTER_ATTEMPTS_PER_HOUR) {
+    return true;
+  }
+
+  filtered.push(now);
+
+  registerCleanupCounter++;
+  if (registerCleanupCounter >= 20) {
+    registerCleanupCounter = 0;
+    for (const [ip, ts] of registerAttempts) {
+      const active = ts.filter((t) => now - t < ONE_HOUR_MS);
+      if (active.length === 0) {
+        registerAttempts.delete(ip);
       }
     }
   }
@@ -557,6 +598,120 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
       user,
       permissions: authService.getPermissions(user.role),
     });
+  });
+
+  // ===== POST /register-public — 公开自助注册 (v0.6.0) =====
+  // 无需认证，角色强制为 user，独立限流 (5次/小时/IP)
+  // 注册成功后自动登录（返回 JWT cookies）
+  app.post("/register-public", async (c) => {
+    const start = Date.now();
+    const clientIp = getClientIp(c, trustProxy);
+
+    // 注册限流 — 5 次/小时/IP
+    if (isRegisterRateLimited(clientIp)) {
+      recordAuthAudit(
+        c,
+        "auth_register",
+        "rate_limited",
+        start,
+        "Registration rate limited",
+      );
+      return c.json(
+        { error: "Too many registration attempts. Please try again later." },
+        429,
+      );
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = RegisterInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Validation failed", details: parsed.error.issues },
+        400,
+      );
+    }
+
+    // 强制角色为 user — 公开注册不允许创建 admin
+    const user = authService.register(
+      parsed.data.username,
+      parsed.data.password,
+      "user",
+    );
+    if (!user) {
+      return c.json({ error: "Username already exists" }, 409);
+    }
+
+    // 自动登录 — 注册成功后直接设置 JWT cookies
+    const loginResult = authService.login(
+      parsed.data.username,
+      parsed.data.password,
+    );
+    if (!loginResult) {
+      // 理论上不应该到这里（刚注册成功的用户应该能登录）
+      recordAuthAudit(
+        c,
+        "auth_register",
+        "success",
+        start,
+        `Registered user: ${parsed.data.username} (auto-login failed)`,
+      );
+      return c.json({ user }, 201);
+    }
+
+    // 设置 httpOnly cookies (access + refresh)
+    c.header(
+      "Set-Cookie",
+      buildSetCookie(
+        COOKIE_ACCESS_TOKEN,
+        loginResult.accessToken,
+        loginResult.accessExpiresIn,
+        {
+          secure,
+          path: "/",
+          sameSite: "Lax",
+        },
+      ),
+    );
+    c.header(
+      "Set-Cookie",
+      buildSetCookie(
+        COOKIE_REFRESH_TOKEN,
+        loginResult.refreshToken,
+        loginResult.refreshExpiresIn,
+        {
+          secure,
+          path: "/api/auth",
+          sameSite: "Strict",
+        },
+      ),
+      { append: true },
+    );
+
+    recordAuthAudit(
+      c,
+      "auth_register",
+      "success",
+      start,
+      `Self-registered user: ${parsed.data.username}`,
+    );
+    log.info("User self-registered", {
+      username: parsed.data.username,
+      ip: clientIp,
+    });
+
+    return c.json(
+      {
+        user: loginResult.user,
+        expires_in: loginResult.accessExpiresIn,
+      },
+      201,
+    );
   });
 
   // ===== POST /register — 需要 admin =====

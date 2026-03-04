@@ -94,6 +94,8 @@ export interface ApiKeyRecord {
   total_requests: number;
   /** 创建者 (admin key prefix 或 'system') */
   created_by: string;
+  /** 关联用户 ID — null 表示管理员全局 key (v0.6.0) */
+  user_id: number | null;
 }
 
 /**
@@ -113,6 +115,8 @@ export interface ApiKeyResponse {
   metadata: Record<string, unknown>;
   total_requests: number;
   created_by: string;
+  /** 关联用户 ID — null 表示管理员全局 key (v0.6.0) */
+  user_id: number | null;
   /** 计算字段: not revoked AND not expired */
   is_active: boolean;
 }
@@ -429,6 +433,7 @@ export function toApiKeyResponse(record: ApiKeyRecord): ApiKeyResponse {
     metadata: safeJsonParse<Record<string, unknown>>(record.metadata, {}),
     total_requests: record.total_requests,
     created_by: record.created_by,
+    user_id: record.user_id,
     is_active: !isRevoked && !isExpired,
   };
 }

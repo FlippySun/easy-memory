@@ -39,8 +39,13 @@ import {
 } from "./schemas.js";
 import { createAdminRoutes } from "./admin-routes.js";
 import { createAuthRoutes } from "./auth-routes.js";
+import { createUserKeyRoutes } from "./user-key-routes.js";
 import { adminAuth } from "./admin-auth.js";
 import type { AuditOperation, AuditOutcome } from "../types/audit-schema.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { registerTools } from "../mcp/server.js";
+import { cors } from "hono/cors";
 
 // =========================================================================
 // Types
@@ -146,6 +151,79 @@ function createApp(container: AppContainer): Hono<Env> {
   });
   app.route("/api/auth", authRoutes);
 
+  // ===== User Key Routes — 用户自助 API Key 管理 (v0.6.0) =====
+  const userKeyRoutes = createUserKeyRoutes({
+    authService: container.auth,
+    apiKeyManager: container.apiKeyManager,
+    adminToken: config.adminToken,
+  });
+  app.route("/api/user/keys", userKeyRoutes);
+
+  // ===== MCP Streamable HTTP — API Key 认证的 MCP 远程接入点 (v0.6.0) =====
+  app.use(
+    "/mcp",
+    cors({
+      origin: "*",
+      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      allowHeaders: [
+        "Content-Type",
+        "Authorization",
+        "mcp-session-id",
+        "Last-Event-ID",
+        "mcp-protocol-version",
+      ],
+      exposeHeaders: ["mcp-session-id", "mcp-protocol-version"],
+    }),
+  );
+
+  app.all("/mcp", async (c) => {
+    // 1. Bearer API Key 认证
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return c.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "API key required" },
+        },
+        401,
+      );
+    }
+    const apiKey = authHeader.slice(7);
+    const validation = container.apiKeyManager.validateKey(apiKey);
+    if (!validation) {
+      return c.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "Invalid or expired API key" },
+        },
+        401,
+      );
+    }
+    if (container.banManager.isKeyBanned(validation.id)) {
+      return c.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "API key has been banned" },
+        },
+        403,
+      );
+    }
+    container.apiKeyManager.recordUsage(validation.key_hash);
+
+    // 2. 每请求创建无状态 MCP Server + Transport
+    // stateless — 不生成 session，每个请求独立处理
+    const transport = new WebStandardStreamableHTTPServerTransport({});
+    const mcpServer = new McpServer({
+      name: "easy-memory",
+      version: "0.6.0",
+    });
+    registerTools(mcpServer, container);
+    await mcpServer.connect(transport);
+
+    // 3. 委托 transport 处理 HTTP 请求
+    return transport.handleRequest(c.req.raw);
+  });
+
   // ===== Admin Routes — ADMIN_TOKEN + JWT admin 双路径认证 (C2 FIX) =====
   const adminRoutes = createAdminRoutes({
     analytics: container.analytics,
@@ -178,6 +256,11 @@ function createApp(container: AppContainer): Hono<Env> {
       await next();
       return;
     }
+    // User Key 路由使用 JWT auth，跳过 bearerAuth
+    if (c.req.path.startsWith("/api/user")) {
+      await next();
+      return;
+    }
     return authMiddleware(c, next);
   });
 
@@ -185,6 +268,10 @@ function createApp(container: AppContainer): Hono<Env> {
   // B1 FIX: Auth 路由的 logout/refresh 是无 body 的 POST — 跳过 Content-Type 检查
   app.use("/api/*", async (c, next) => {
     if (c.req.path.startsWith("/api/auth")) {
+      await next();
+      return;
+    }
+    if (c.req.path.startsWith("/api/user")) {
       await next();
       return;
     }
@@ -206,6 +293,11 @@ function createApp(container: AppContainer): Hono<Env> {
     // Auth 路由有独立的登录限流 (auth-routes.ts)，跳过全局限流
     // 防止攻击者通过 flood /api/auth/login 耗尽全局配额阻塞其他用户的记忆操作
     if (c.req.path.startsWith("/api/auth")) {
+      await next();
+      return;
+    }
+    // User Key 路由使用 JWT auth，不受全局 bearer 限流影响
+    if (c.req.path.startsWith("/api/user")) {
       await next();
       return;
     }
@@ -234,6 +326,11 @@ function createApp(container: AppContainer): Hono<Env> {
     // Auth 路由有自己的审计机制 (auth-routes.ts 中的 recordAuthAudit)
     // 跳过全局审计防止双重记录
     if (c.req.path.startsWith("/api/auth")) {
+      await next();
+      return;
+    }
+    // User Key 路由有自己的日志记录 (user-key-routes.ts)
+    if (c.req.path.startsWith("/api/user")) {
       await next();
       return;
     }

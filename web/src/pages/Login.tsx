@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../contexts/auth";
 import { Button, Input } from "../components/ui";
 import { Brain, User, Lock } from "lucide-react";
@@ -36,7 +36,7 @@ export function LoginPage() {
             <Brain size={32} />
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Easy Memory</h1>
-          <p className="text-sm text-slate-500 mt-1">Admin Panel</p>
+          <p className="text-sm text-slate-500 mt-1">Memory Service</p>
         </div>
 
         {/* Form */}
@@ -83,6 +83,18 @@ export function LoginPage() {
               Sign In
             </Button>
           </form>
+
+          <div className="mt-4 text-center">
+            <span className="text-sm text-slate-500">
+              Don't have an account?{" "}
+              <Link
+                to="/register"
+                className="text-primary-600 hover:text-primary-700 font-medium"
+              >
+                Register
+              </Link>
+            </span>
+          </div>
         </div>
 
         <p className="text-center text-xs text-slate-400 mt-6">
