@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-07-05
+
+### Added
+
+- **[Phase 2] Admin API**: 完整的管理后台，支持 `ADMIN_TOKEN` 独立认证
+  - API Key CRUD: 创建 / 列出 / 查看 / 更新 / 吊销 / 轮换 (`/api/admin/keys`)
+  - IP Ban 管理: 封禁 / 列出 / 解封 (`/api/admin/bans`)
+  - 用量分析: 总览 / 用户用量 / 项目用量 / 操作统计 / 错误率 / 时间线 / 搜索命中率 (`/api/admin/analytics/*`)
+  - 审计日志查询与导出 (CSV/JSONL) (`/api/admin/audit/*`)
+  - 运行时配置管理 (GET/PATCH/Reset) (`/api/admin/config`)
+- **[Phase 2] 审计日志采集**: JSONL 热写 + SQLite 冷分析双层架构
+  - `AuditService`: 非阻塞 `record()` (<0.1ms), 缓冲异步 flush, 日志轮转、OOM 防护、flush 超时强制重置
+  - `AnalyticsService`: SQLite WAL, JSONL cursor-based 导入, 小时/日聚合, 保留策略 (raw 30d/hourly 7d/daily 90d)
+- **[Phase 2] 多租户鉴权**: 三层认证架构
+  - `ADMIN_TOKEN`: 管理后台专用 (timing-safe compare)
+  - `HTTP_AUTH_TOKEN`: Master Token 直接访问
+  - Managed API Keys: Per-key rate limit / project 隔离 / 可吊销轮换 (SHA-256 哈希存储)
+- **[Phase 2] 安全体系**: IP Ban + Per-Key Rate Limit + TLS 强制 + 代理感知 IP 提取
+- **双写审计中间件**: try/finally 模式确保 500 错误也被审计
+- **RuntimeConfigManager**: onChange 监听 + JSON 持久化 + 单独 error isolation
+
+### Fixed
+
+- **[BUG] mapPathToOperation() 输出与 SQL 查询不匹配** (Critical): 审计中间件返回 `"save"` 但 analytics SQL 硬编码 `'memory_save'`，导致所有 HTTP 模式分析数据静默丢失。修复为统一 `memory_*` 前缀。
+- **[BUG] Hono c.text() 覆盖自定义 Content-Type** (Medium): CSV/JSONL 导出端点的 `c.text()` 强制设置 `text/plain`，导致浏览器无法识别文件类型。改为 `c.body()`。
+- **[BUG] ADMIN_TOKEN 部署配置缺失**: docker-compose.prod.yml 和 .env.example 未包含 ADMIN_TOKEN，导致生产环境 Admin 功能静默禁用。
+
+### Changed
+
+- **白皮书整合**: 删除冗余的 `FEASIBILITY-ANALYSIS copy.md`，更新 `AUDIT-LOGGING-WHITEPAPER.md` 至 v1.1 (ADR-AUDIT-11/12 + 附录 D SQL Schema 偏差说明)
+- **README 大幅扩充**: 新增 VPS 生产部署指南、三层认证架构、Admin API 参考、用户管理流程、远程 MCP SSE 配置示例
+- **项目结构文档**: 更新 README 和 .env.example 以反映 Phase 2 新增文件
+
+### Tests
+
+- 新增 `audit-analytics-comprehensive.test.ts` (73 测试用例，20 测试套件)
+  - 全管道 E2E / JSONL 导入管道 / 聚合引擎 / 保留策略
+  - Admin Analytics/Audit/Config API E2E
+  - RuntimeConfig onChange 监听器
+  - AuditService 边界用例（OOM/超时/并发刷新）
+  - AnalyticsService 查询边界 / buildEntry 健壮性 / 命中率 / 错误率
+- 总计: **30 文件, 786 测试用例全部通过**
+
 ## [0.2.1] - 2025-07-03
 
 ### Fixed

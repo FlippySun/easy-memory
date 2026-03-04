@@ -396,4 +396,75 @@ describe("RateLimiter", () => {
       expect(limiter.isGeminiCircuitOpen).toBe(false);
     });
   });
+
+  // =========================================================================
+  // Per-Key Rate Limit
+  // =========================================================================
+
+  describe("checkPerKeyRate", () => {
+    it("should allow calls within per-key limit", () => {
+      const limiter = new RateLimiter();
+      // 5 次调用在每分钟 10 限制内
+      for (let i = 0; i < 5; i++) {
+        limiter.checkPerKeyRate("key-hash-abc", 10);
+      }
+      expect(limiter.getStats().per_key_limiter_count).toBe(1);
+    });
+
+    it("should throw when per-key limit exceeded", () => {
+      const limiter = new RateLimiter();
+      const limit = 3;
+      for (let i = 0; i < limit; i++) {
+        limiter.checkPerKeyRate("key-hash-abc", limit);
+      }
+      expect(() => limiter.checkPerKeyRate("key-hash-abc", limit)).toThrow(
+        /Rate limit exceeded/,
+      );
+    });
+
+    it("should use global default when perKeyLimit is null", () => {
+      const limiter = new RateLimiter({ maxCallsPerMinute: 2 });
+      limiter.checkPerKeyRate("key-hash-abc", null);
+      limiter.checkPerKeyRate("key-hash-abc", null);
+      expect(() => limiter.checkPerKeyRate("key-hash-abc", null)).toThrow(
+        /Rate limit exceeded/,
+      );
+    });
+
+    it("should track separate keys independently", () => {
+      const limiter = new RateLimiter();
+      const limit = 2;
+      // Key A exhausts its limit
+      limiter.checkPerKeyRate("key-A", limit);
+      limiter.checkPerKeyRate("key-A", limit);
+      expect(() => limiter.checkPerKeyRate("key-A", limit)).toThrow();
+
+      // Key B should still work
+      limiter.checkPerKeyRate("key-B", limit);
+      expect(limiter.getStats().per_key_limiter_count).toBe(2);
+    });
+
+    it("should expire old timestamps after 1 minute", () => {
+      const limiter = new RateLimiter();
+      const limit = 2;
+      limiter.checkPerKeyRate("key-hash", limit);
+      limiter.checkPerKeyRate("key-hash", limit);
+      expect(() => limiter.checkPerKeyRate("key-hash", limit)).toThrow();
+
+      // Advance past 1 minute
+      vi.advanceTimersByTime(61_000);
+
+      // Should work again
+      limiter.checkPerKeyRate("key-hash", limit);
+    });
+
+    it("should report per_key_limiter_count in stats", () => {
+      const limiter = new RateLimiter();
+      expect(limiter.getStats().per_key_limiter_count).toBe(0);
+      limiter.checkPerKeyRate("key-1", 10);
+      limiter.checkPerKeyRate("key-2", 10);
+      limiter.checkPerKeyRate("key-3", 10);
+      expect(limiter.getStats().per_key_limiter_count).toBe(3);
+    });
+  });
 });

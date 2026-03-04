@@ -22,6 +22,11 @@ import {
 import type { EmbeddingProvider } from "./services/embedding.js";
 import { BM25Encoder } from "./services/bm25.js";
 import { RateLimiter } from "./utils/rate-limiter.js";
+import { AuditService } from "./services/audit.js";
+import { AnalyticsService } from "./services/analytics.js";
+import { ApiKeyManager } from "./services/api-key-manager.js";
+import { BanManager } from "./services/ban-manager.js";
+import { RuntimeConfigManager } from "./services/runtime-config.js";
 import { log } from "./utils/logger.js";
 
 // =========================================================================
@@ -70,6 +75,10 @@ export interface AppConfig {
   trustProxy: boolean;
   /** 拒绝非 HTTPS 请求（需同时启用 trustProxy）[ADR-SHELL-09] */
   requireTls: boolean;
+
+  // Admin Management
+  /** Admin API Token — 独立于 httpAuthToken，空串 = admin 功能禁用 */
+  adminToken: string;
 }
 
 /**
@@ -82,6 +91,16 @@ export interface AppContainer {
   readonly rateLimiter: RateLimiter;
   /** [ADR 补充二十] BM25 稀疏向量编码器，用于混合检索 */
   readonly bm25: BM25Encoder;
+  /** 审计日志服务 — JSONL 热写入层 */
+  readonly audit: AuditService;
+  /** 分析服务 — SQLite 冷分析层 */
+  readonly analytics: AnalyticsService;
+  /** API Key 管理服务 */
+  readonly apiKeyManager: ApiKeyManager;
+  /** Ban 管理服务 */
+  readonly banManager: BanManager;
+  /** 运行时配置管理 */
+  readonly runtimeConfig: RuntimeConfigManager;
 }
 
 // =========================================================================
@@ -168,6 +187,9 @@ export function parseAppConfig(
     httpHost: env.HTTP_HOST ?? "127.0.0.1",
     trustProxy: env.TRUST_PROXY === "true",
     requireTls: env.REQUIRE_TLS === "true",
+
+    // Admin Management
+    adminToken: env.ADMIN_TOKEN ?? "",
   };
 
   // ⚠️ 矛盾配置检测: REQUIRE_TLS 需要 TRUST_PROXY 才有意义（fast-fail）
@@ -274,11 +296,53 @@ export function createContainer(config: AppConfig): AppContainer {
   // ⑥ BM25Encoder [ADR 补充二十] — 纯内存计算，无外部 IO
   const bm25 = new BM25Encoder();
 
+  // ⑦ AuditService — JSONL 审计日志热写入
+  const audit = new AuditService();
+  audit.start();
+
+  // ⑧ AnalyticsService — SQLite 分析存储
+  const analytics = new AnalyticsService();
+  analytics.open();
+
+  // ⑨ ApiKeyManager — API Key CRUD + SQLite 持久化
+  const apiKeyManager = new ApiKeyManager();
+  apiKeyManager.open();
+
+  // ⑩ BanManager — Ban 管理 (与 ApiKeyManager 共享 admin DB 连接)
+  const banManager = new BanManager();
+  const adminDb = apiKeyManager.getDatabase();
+  if (adminDb) {
+    banManager.open(adminDb);
+  } else {
+    // 降级: ApiKeyManager DB 不可用时独立打开
+    banManager.open();
+  }
+
+  // ⑪ RuntimeConfigManager — 运行时可变配置
+  const runtimeConfig = new RuntimeConfigManager({
+    defaults: {
+      rate_limit_per_minute: config.rateLimitPerMinute,
+      gemini_max_per_hour: config.geminiMaxPerHour,
+      gemini_max_per_day: config.geminiMaxPerDay,
+      default_project: config.defaultProject,
+      require_tls: config.requireTls,
+      audit_enabled: true,
+      raw_retention_days: 30,
+      hourly_retention_days: 7,
+      daily_retention_days: 90,
+    },
+  });
+
   return {
     config,
     qdrant,
     embedding,
     rateLimiter,
     bm25,
+    audit,
+    analytics,
+    apiKeyManager,
+    banManager,
+    runtimeConfig,
   };
 }

@@ -332,6 +332,37 @@ export async function startMcpShell(container: AppContainer): Promise<void> {
     async () => {
       log.info("Shutting down MCP server");
       await server.close();
+
+      // P9-FIX: MCP 模式必须关闭 audit/analytics 等服务，
+      // 防止 buffer 数据丢失和 SQLite 连接泄漏。
+      try {
+        await container.audit.close();
+      } catch (err) {
+        log.warn("Failed to close audit service during MCP shutdown", {
+          error: String(err),
+        });
+      }
+      try {
+        container.analytics.close();
+      } catch (err) {
+        log.warn("Failed to close analytics service during MCP shutdown", {
+          error: String(err),
+        });
+      }
+      try {
+        container.apiKeyManager.close();
+      } catch (err) {
+        log.warn("Failed to close apiKeyManager during MCP shutdown", {
+          error: String(err),
+        });
+      }
+      try {
+        container.banManager.close();
+      } catch (err) {
+        log.warn("Failed to close banManager during MCP shutdown", {
+          error: String(err),
+        });
+      }
     },
     {
       mode: "mcp",

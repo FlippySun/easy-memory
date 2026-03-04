@@ -23,6 +23,7 @@ import { handleForget } from "../tools/forget.js";
 import { handleStatus } from "../tools/status.js";
 import { setupGracefulShutdown } from "../utils/shutdown.js";
 import { log } from "../utils/logger.js";
+import { getClientIp } from "../utils/ip.js";
 import type { AppContainer } from "../container.js";
 import {
   bearerAuth,
@@ -36,15 +37,48 @@ import {
   HttpSearchInputSchema,
   HttpForgetInputSchema,
 } from "./schemas.js";
+import { createAdminRoutes } from "./admin-routes.js";
+import { adminAuth } from "./admin-auth.js";
+import type { AuditOperation, AuditOutcome } from "../types/audit-schema.js";
 
 // =========================================================================
 // Types
 // =========================================================================
 
-/** Hono 应用的环境变量绑定 */
+/** Hono 应用的环境变量绑定 — 包含鉴权注入的上下文变量 */
 type Env = {
-  Variables: Record<string, never>;
+  Variables: {
+    /** 鉴权模式: "master" | "api_key" */
+    authMode?: string;
+    /** Managed API Key 记录 (仅 authMode="api_key" 时存在) */
+    apiKeyRecord?: import("../types/admin-schema.js").ApiKeyRecord;
+  };
 };
+
+// =========================================================================
+// Helpers — Path-to-Operation Mapping
+// =========================================================================
+
+/** HTTP 路径映射到审计操作名称 */
+function mapPathToOperation(
+  path: string,
+  method: string,
+): AuditOperation | string {
+  if (path === "/api/save" && method === "POST") return "memory_save";
+  if (path === "/api/search" && method === "POST") return "memory_search";
+  if (path === "/api/forget" && method === "POST") return "memory_forget";
+  if (path === "/api/status") return "memory_status";
+  return `${method.toLowerCase()}:${path}`;
+}
+
+/** HTTP 状态码映射到审计结果 */
+function mapStatusToOutcome(status: number): AuditOutcome {
+  if (status >= 200 && status < 300) return "success";
+  if (status === 401) return "unauthorized";
+  if (status === 429) return "rate_limited";
+  if (status >= 400 && status < 500) return "rejected";
+  return "error";
+}
 
 // =========================================================================
 // Route Registration
@@ -73,16 +107,80 @@ function createApp(container: AppContainer): Hono<Env> {
   // /health 天然豁免（反向代理健康探针走内网 HTTP）
   app.use("/api/*", tlsEnforcement(config.trustProxy, config.requireTls));
 
-  // 鉴权: 除 /health 外所有路由需要 Bearer Token
-  app.use("/api/*", bearerAuth(config.httpAuthToken));
+  // Ban 检查: 所有 API 请求先检查 IP ban 状态 (fail-fast)
+  app.use("/api/*", async (c, next) => {
+    // Admin 路由跳过 ban 检查 (admin 不能 ban 自己)
+    if (c.req.path.startsWith("/api/admin")) {
+      await next();
+      return;
+    }
+
+    const clientIp = getClientIp(c, config.trustProxy);
+    const ipCheck = container.banManager.isIpBanned(clientIp);
+    if (ipCheck.banned) {
+      return c.json(
+        {
+          error: "Forbidden",
+          reason: "IP address is banned",
+          ban_reason: ipCheck.reason,
+          expires_at: ipCheck.expires_at,
+        },
+        403,
+      );
+    }
+
+    await next();
+  });
+
+  // ===== Admin Routes — 独立的 ADMIN_TOKEN 认证 =====
+  const adminRoutes = createAdminRoutes({
+    analytics: container.analytics,
+    audit: container.audit,
+    apiKeyManager: container.apiKeyManager,
+    banManager: container.banManager,
+    runtimeConfig: container.runtimeConfig,
+  });
+  app.use("/api/admin/*", adminAuth(config.adminToken));
+  app.route("/api/admin", adminRoutes);
+
+  // 鉴权: 除 /health 和 /api/admin/* 外所有路由需要 Bearer Token
+  // 采用双层鉴权: Master Token (直通) 或 Managed API Key (含 per-key ban + rate limit)
+  const authMiddleware = bearerAuth({
+    masterToken: config.httpAuthToken,
+    apiKeyManager: container.apiKeyManager,
+    banManager: container.banManager,
+    rateLimiter: rateLimiter,
+    trustProxy: config.trustProxy,
+  });
+
+  app.use("/api/*", async (c, next) => {
+    // Admin 路由已由 adminAuth 处理
+    if (c.req.path.startsWith("/api/admin")) {
+      await next();
+      return;
+    }
+    return authMiddleware(c, next);
+  });
 
   // Content-Type 校验: POST 请求必须携带 application/json
   app.use("/api/*", validateJsonContentType);
 
-  // 限流: 除 GET /api/status 外的所有 API 路由
+  // 限流: 全局限流仅对 Master Token 生效 (Managed Key 在 bearerAuth 内已做 per-key 限流)
   app.use("/api/*", async (c, next) => {
     // GET /api/status 为只读健康检查，跳过限流
     if (c.req.path === "/api/status" && c.req.method === "GET") {
+      await next();
+      return;
+    }
+    // Admin 路由跳过全局限流 (admin 有权不受限)
+    if (c.req.path.startsWith("/api/admin")) {
+      await next();
+      return;
+    }
+    // Managed key 已在 bearerAuth 内完成 per-key 限流，此处仅对 master token 做全局兜底
+    const authMode = c.get("authMode");
+    if (authMode === "api_key") {
+      // per-key 限流已在 bearerAuth 内执行
       await next();
       return;
     }
@@ -92,6 +190,82 @@ function createApp(container: AppContainer): Hono<Env> {
       return c.json({ error: "Too many requests" }, 429);
     }
     await next();
+  });
+
+  // ===== 审计中间件 — 记录所有 /api/* 请求到 AuditService + AnalyticsService =====
+  app.use("/api/*", async (c, next) => {
+    // Admin 路由有自己的审计机制 (admin-routes.ts 中的 recordAdminAction)
+    if (c.req.path.startsWith("/api/admin")) {
+      await next();
+      return;
+    }
+
+    // ⚠️ 必须在 await next() 之前克隆请求体 — 路由 handler 消费后 body stream 不可重读
+    let project = config.defaultProject;
+    try {
+      if (c.req.method === "POST") {
+        const body = (await c.req.raw.clone().json()) as Record<
+          string,
+          unknown
+        >;
+        if (body?.project && typeof body.project === "string") {
+          project = body.project;
+        }
+      } else if (c.req.method === "GET") {
+        const qp = c.req.query("project");
+        if (qp) project = qp;
+      }
+    } catch {
+      // 解析失败时使用默认值
+    }
+
+    const start = Date.now();
+
+    // P0-FIX: try/finally 确保异常路径也被审计 — 消除 500 错误审计盲区
+    try {
+      await next();
+    } finally {
+      const elapsed = Date.now() - start;
+
+      // 采集鉴权信息
+      const keyRecord = c.get("apiKeyRecord") as
+        | import("../types/admin-schema.js").ApiKeyRecord
+        | undefined;
+      const keyPrefix = keyRecord
+        ? keyRecord.key_hash.slice(0, 8)
+        : c.get("authMode") === "master"
+          ? "master"
+          : "";
+
+      try {
+        const entry = container.audit.buildEntry({
+          operation: mapPathToOperation(
+            c.req.path,
+            c.req.method,
+          ) as AuditOperation,
+          project,
+          outcome: mapStatusToOutcome(c.res.status) as AuditOutcome,
+          outcomeDetail: c.res.status >= 400 ? `HTTP ${c.res.status}` : "",
+          elapsedMs: elapsed,
+          httpMethod: c.req.method,
+          httpPath: c.req.path,
+          httpStatus: c.res.status,
+          clientIp: getClientIp(c, config.trustProxy),
+          keyPrefix,
+          userAgent: c.req.header("User-Agent") ?? "",
+        });
+
+        // 双写: JSONL (热写入) + SQLite (冷分析)
+        container.audit.record(entry);
+        container.analytics.ingestEvent(entry);
+      } catch (err) {
+        // 审计记录失败不应影响请求响应（防御性）
+        log.error("Audit recording failed", {
+          error: err instanceof Error ? err.message : String(err),
+          path: c.req.path,
+        });
+      }
+    }
   });
 
   // ===== Health Check (无需鉴权) =====
@@ -208,10 +382,62 @@ export async function startHttpShell(container: AppContainer): Promise<void> {
     },
   );
 
+  // P3-FIX: 缩短 keep-alive 超时，减少 shutdown 时的 drain 竞态窗口
+  // 默认 Node.js keepAliveTimeout=5000, headersTimeout=60000
+  // 将 keepAliveTimeout 设为 2s，headersTimeout 必须 > keepAliveTimeout
+  if ("keepAliveTimeout" in server) {
+    (server as { keepAliveTimeout: number }).keepAliveTimeout = 2000;
+  }
+  if ("headersTimeout" in server) {
+    (server as { headersTimeout: number }).headersTimeout = 3000;
+  }
+
   // 优雅关闭 — HTTP 模式: 不监听 stdin，先关 HTTP 再关服务
   setupGracefulShutdown(
     async () => {
       log.info("Shutting down HTTP server");
+      // P8-FIX: 每个 close() 独立 try-catch，确保单个失败不阻塞后续服务关闭
+      const shutdownErrors: Array<{ service: string; error: Error }> = [];
+
+      try {
+        await container.audit.close();
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        log.error("Failed to close audit service", { error: error.message });
+        shutdownErrors.push({ service: "audit", error });
+      }
+
+      try {
+        container.analytics.close();
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        log.error("Failed to close analytics service", {
+          error: error.message,
+        });
+        shutdownErrors.push({ service: "analytics", error });
+      }
+
+      try {
+        container.apiKeyManager.close();
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        log.error("Failed to close apiKeyManager", { error: error.message });
+        shutdownErrors.push({ service: "apiKeyManager", error });
+      }
+
+      try {
+        container.banManager.close();
+      } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        log.error("Failed to close banManager", { error: error.message });
+        shutdownErrors.push({ service: "banManager", error });
+      }
+
+      if (shutdownErrors.length > 0) {
+        log.warn("Shutdown completed with errors", {
+          failedServices: shutdownErrors.map((e) => e.service),
+        });
+      }
     },
     {
       mode: "http",

@@ -41,6 +41,8 @@ export interface RateLimiterStats {
   gemini_circuit_open: boolean;
   /** 当前 Gemini 连续失败次数 */
   gemini_consecutive_failures: number;
+  /** 当前活跃的 per-key 限流器数量 */
+  per_key_limiter_count: number;
 }
 
 // =========================================================================
@@ -82,6 +84,11 @@ export class RateLimiter {
   /** 失败熔断触发时的时间戳 — 用于冷却期自动恢复 */
   private _failureCircuitOpenedAt = 0;
 
+  /** Per-key 限流器: key_hash → 调用时间戳数组 */
+  private perKeyTimestamps: Map<string, number[]> = new Map();
+  /** Per-key 限流器清理计数器 — 每 100 次 checkPerKeyRate 清理一次过期 key */
+  private perKeyCleanupCounter = 0;
+
   constructor(config: RateLimiterConfig = {}) {
     this.maxCallsPerMinute = config.maxCallsPerMinute ?? 60;
     this.geminiMaxCallsPerHour = config.geminiMaxCallsPerHour ?? 200;
@@ -110,6 +117,64 @@ export class RateLimiter {
       );
     }
     this.callTimestamps.push(now);
+  }
+
+  /**
+   * Per-key 限流检查 — 独立的滑动窗口（每分钟）。
+   *
+   * 每个 API Key 拥有独立的调用时间戳窗口。
+   * 如果 maxCallsPerMinute 为 null/undefined，使用全局默认值。
+   *
+   * @param keyHash 用于标识唯一 key 的 hash
+   * @param perKeyLimit key 自身的每分钟限制（null 使用全局默认值）
+   * @throws {Error} 超出限制时抛出
+   */
+  checkPerKeyRate(keyHash: string, perKeyLimit: number | null): void {
+    const limit = perKeyLimit ?? this.maxCallsPerMinute;
+    const now = Date.now();
+
+    let timestamps = this.perKeyTimestamps.get(keyHash);
+    if (!timestamps) {
+      timestamps = [];
+      this.perKeyTimestamps.set(keyHash, timestamps);
+    }
+
+    // 过滤过期时间戳
+    const filtered = timestamps.filter((t) => now - t < ONE_MINUTE_MS);
+    this.perKeyTimestamps.set(keyHash, filtered);
+
+    if (filtered.length >= limit) {
+      log.warn("Per-key rate limit exceeded", {
+        keyHash: keyHash.slice(0, 8) + "...",
+        limit,
+        current: filtered.length,
+      });
+      throw new Error(
+        `Rate limit exceeded: max ${limit} calls/minute for this key`,
+      );
+    }
+    filtered.push(now);
+
+    // 定期清理不活跃 key (避免 Map 无限增长)
+    this.perKeyCleanupCounter++;
+    if (this.perKeyCleanupCounter >= 100) {
+      this.perKeyCleanupCounter = 0;
+      this.cleanupPerKeyTimestamps(now);
+    }
+  }
+
+  /**
+   * 清理不活跃 key 的时间戳 — 防止 Map 无限增长。
+   */
+  private cleanupPerKeyTimestamps(now: number): void {
+    for (const [key, timestamps] of this.perKeyTimestamps) {
+      const active = timestamps.filter((t) => now - t < ONE_MINUTE_MS);
+      if (active.length === 0) {
+        this.perKeyTimestamps.delete(key);
+      } else {
+        this.perKeyTimestamps.set(key, active);
+      }
+    }
   }
 
   /**
@@ -262,6 +327,7 @@ export class RateLimiter {
       gemini_calls_today: this.geminiDayCount,
       gemini_circuit_open: this._geminiCircuitOpen,
       gemini_consecutive_failures: this._consecutiveGeminiFailures,
+      per_key_limiter_count: this.perKeyTimestamps.size,
     };
   }
 }

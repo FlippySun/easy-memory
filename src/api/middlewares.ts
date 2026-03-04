@@ -11,6 +11,9 @@
 import type { Context, Next, ErrorHandler } from "hono";
 import { timingSafeEqual } from "node:crypto";
 import { log } from "../utils/logger.js";
+import type { ApiKeyManager } from "../services/api-key-manager.js";
+import type { BanManager } from "../services/ban-manager.js";
+import type { RateLimiter } from "../utils/rate-limiter.js";
 
 /**
  * Timing-safe 字符串比较 — 防御 timing attack。
@@ -28,19 +31,41 @@ function safeCompare(a: string, b: string): boolean {
 }
 
 // =========================================================================
-// Bearer Token Authentication
+// Bearer Token Authentication — 双层鉴权 (Master Token + Managed API Key)
 // =========================================================================
 
 /**
- * 创建 Bearer Token 认证中间件。
- *
- * 校验 Authorization: Bearer <token> 头。
- * 如果 authToken 为空字符串，跳过认证（开发模式）。
+ * 双层鉴权中间件配置。
  */
-export function bearerAuth(authToken: string) {
+export interface BearerAuthConfig {
+  /** 全局主 Token (HTTP_AUTH_TOKEN 环境变量) — 空串 = 开发模式跳过认证 */
+  masterToken: string;
+  /** API Key 管理器 — 用于 managed key 验证 */
+  apiKeyManager: ApiKeyManager;
+  /** Ban 管理器 — 用于 per-key ban 检查 */
+  banManager: BanManager;
+  /** 限流器 — 用于 per-key 限流 */
+  rateLimiter: RateLimiter;
+  /** 是否信任代理 */
+  trustProxy: boolean;
+}
+
+/**
+ * 创建双层 Bearer Token 认证中间件。
+ *
+ * 鉴权优先级:
+ * 1. Master Token (HTTP_AUTH_TOKEN) — 直通 (无 per-key 限制)
+ * 2. Managed API Key — validateKey → ban 检查 → per-key 限流 → recordUsage
+ *
+ * 如果 masterToken 为空字符串，跳过认证（开发模式）。
+ * 成功认证后将 API Key 记录注入 Hono Context 的 `apiKeyRecord` 变量。
+ */
+export function bearerAuth(config: BearerAuthConfig) {
+  const { masterToken, apiKeyManager, banManager, rateLimiter } = config;
+
   return async (c: Context, next: Next) => {
-    // 空 token = 开发模式，跳过认证
-    if (!authToken) {
+    // 空 masterToken = 开发模式，跳过认证
+    if (!masterToken) {
       await next();
       return;
     }
@@ -57,7 +82,87 @@ export function bearerAuth(authToken: string) {
     }
     const scheme = authorization.slice(0, spaceIdx);
     const token = authorization.slice(spaceIdx + 1).trim();
+
     // RFC 7235 §2.1: auth scheme 是 case-insensitive
+    if (scheme.toLowerCase() !== "bearer" || !token) {
+      return c.json({ error: "Invalid or expired token" }, 401);
+    }
+
+    // Layer 1: Master Token — 直通 (跳过 per-key 限制)
+    if (safeCompare(token, masterToken)) {
+      c.set("authMode", "master");
+      await next();
+      return;
+    }
+
+    // Layer 2: Managed API Key
+    const keyRecord = apiKeyManager.validateKey(token);
+    if (!keyRecord) {
+      return c.json({ error: "Invalid or expired token" }, 401);
+    }
+
+    // Per-key ban 检查
+    const keyBanCheck = banManager.isKeyBanned(keyRecord.id);
+    if (keyBanCheck.banned) {
+      return c.json(
+        {
+          error: "Forbidden",
+          reason: "API key is banned",
+          ban_reason: keyBanCheck.reason,
+          expires_at: keyBanCheck.expires_at,
+        },
+        403,
+      );
+    }
+
+    // Per-key 限流
+    try {
+      rateLimiter.checkPerKeyRate(
+        keyRecord.key_hash,
+        keyRecord.rate_limit_per_minute,
+      );
+    } catch (err: unknown) {
+      // P7-FIX: 仅捕获 rate-limit 异常，其他内部错误向上抛出由 globalErrorHandler 处理
+      if (err instanceof Error && err.message.includes("Rate limit exceeded")) {
+        return c.json({ error: "Too many requests for this key" }, 429);
+      }
+      throw err;
+    }
+
+    // 记录使用 (非阻塞)
+    apiKeyManager.recordUsage(keyRecord.key_hash);
+
+    // 注入 key 信息到 context
+    c.set("authMode", "api_key");
+    c.set("apiKeyRecord", keyRecord);
+
+    await next();
+  };
+}
+
+/**
+ * @deprecated 兼容旧版签名 — 仅用 master token 鉴权（无 managed key 支持）。
+ * 新代码应使用 bearerAuth(BearerAuthConfig)。
+ */
+export function bearerAuthSimple(authToken: string) {
+  return async (c: Context, next: Next) => {
+    // 空 token = 开发模式，跳过认证
+    if (!authToken) {
+      await next();
+      return;
+    }
+
+    const authorization = c.req.header("Authorization");
+    if (!authorization) {
+      return c.json({ error: "Missing Authorization header" }, 401);
+    }
+
+    const spaceIdx = authorization.indexOf(" ");
+    if (spaceIdx === -1) {
+      return c.json({ error: "Invalid or expired token" }, 401);
+    }
+    const scheme = authorization.slice(0, spaceIdx);
+    const token = authorization.slice(spaceIdx + 1).trim();
     if (
       scheme.toLowerCase() !== "bearer" ||
       !token ||
