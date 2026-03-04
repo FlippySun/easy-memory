@@ -4,7 +4,7 @@ import {
   type UserKeyRecord,
   type UserKeyCreateResponse,
 } from "../api/client";
-import { Button, Input } from "../components/ui";
+import { Button, Input, CopyableText } from "../components/ui";
 import { Key, Plus, Trash2, Copy, Check, AlertCircle } from "lucide-react";
 
 export default function MyKeys() {
@@ -23,6 +23,7 @@ export default function MyKeys() {
     null,
   );
   const [copied, setCopied] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const loadKeys = useCallback(async () => {
     try {
@@ -31,9 +32,7 @@ export default function MyKeys() {
       setMaxKeys(res.max_keys);
       setError("");
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load API keys",
-      );
+      setError(err instanceof Error ? err.message : "Failed to load API keys");
     } finally {
       setLoading(false);
     }
@@ -68,15 +67,22 @@ export default function MyKeys() {
   };
 
   const handleRevoke = async (id: string) => {
-    if (!confirm("Are you sure you want to revoke this API key? This cannot be undone.")) {
+    if (
+      !confirm(
+        "Are you sure you want to revoke this API key? This cannot be undone.",
+      )
+    ) {
       return;
     }
+    setActionLoading(id);
     try {
       await userKeysApi.revoke(id);
       setCreatedKey(null);
       await loadKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to revoke key");
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -154,7 +160,10 @@ export default function MyKeys() {
               maxLength={128}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
-            <Button onClick={handleCreate} disabled={creating || !newKeyName.trim()}>
+            <Button
+              onClick={handleCreate}
+              disabled={creating || !newKeyName.trim()}
+            >
               {creating ? "Creating..." : "Create"}
             </Button>
             <Button
@@ -279,15 +288,15 @@ export default function MyKeys() {
             </thead>
             <tbody className="divide-y divide-slate-200">
               {keys.map((key) => (
-                <tr
-                  key={key.id}
-                  className={key.is_active ? "" : "opacity-50"}
-                >
+                <tr key={key.id} className={key.is_active ? "" : "opacity-50"}>
                   <td className="px-6 py-4 text-sm font-medium text-slate-900">
                     {key.name}
                   </td>
                   <td className="px-6 py-4 text-sm font-mono text-slate-600">
-                    {key.prefix}...
+                    <CopyableText
+                      text={key.prefix}
+                      displayText={`${key.prefix}...`}
+                    />
                   </td>
                   <td className="px-6 py-4 text-sm text-slate-500">
                     {new Date(key.created_at).toLocaleDateString()}
@@ -310,10 +319,18 @@ export default function MyKeys() {
                     {key.is_active && (
                       <button
                         onClick={() => handleRevoke(key.id)}
-                        className="text-red-500 hover:text-red-700 p-1"
+                        disabled={actionLoading === key.id}
+                        className="text-red-500 hover:text-red-700 p-1.5 rounded-md hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Revoke key"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        {actionLoading === key.id ? (
+                          <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
                       </button>
                     )}
                   </td>

@@ -32,6 +32,7 @@ export function UsersPage() {
     message: string;
     type: "success" | "error";
   } | null>(null);
+  const [actionLoading, setActionLoading] = useState<number | null>(null);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -55,7 +56,7 @@ export function UsersPage() {
       await authApi.register(form.username, form.password);
       setShowCreate(false);
       setForm({ username: "", password: "" });
-      fetchUsers();
+      await fetchUsers();
       setToast({ message: "User created", type: "success" });
     } catch (err) {
       setToast({
@@ -70,22 +71,28 @@ export function UsersPage() {
   const handleRoleToggle = async (user: UserRecord) => {
     const newRole = user.role === "admin" ? "user" : "admin";
     if (!confirm(`Change ${user.username}'s role to ${newRole}?`)) return;
+    if (actionLoading !== null) return;
+    setActionLoading(user.id);
     try {
       await authApi.updateUser(user.id, { role: newRole });
-      fetchUsers();
+      await fetchUsers();
       setToast({ message: `Role changed to ${newRole}`, type: "success" });
     } catch (err) {
       setToast({
         message: err instanceof Error ? err.message : "Failed to update role",
         type: "error",
       });
+    } finally {
+      setActionLoading(null);
     }
   };
 
   const handleToggleActive = async (user: UserRecord) => {
+    if (actionLoading !== null) return;
+    setActionLoading(user.id);
     try {
       await authApi.updateUser(user.id, { is_active: !user.is_active });
-      fetchUsers();
+      await fetchUsers();
       setToast({
         message: user.is_active ? "User disabled" : "User enabled",
         type: "success",
@@ -95,21 +102,28 @@ export function UsersPage() {
         message: err instanceof Error ? err.message : "Failed to update user",
         type: "error",
       });
+    } finally {
+      setActionLoading(null);
     }
   };
 
   const handleDelete = async (user: UserRecord) => {
     if (!confirm(`Delete user "${user.username}"? This cannot be undone.`))
       return;
+    if (actionLoading !== null) return;
+    setActionLoading(user.id);
     try {
       await authApi.deleteUser(user.id);
-      fetchUsers();
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      await fetchUsers();
       setToast({ message: "User deleted", type: "success" });
     } catch (err) {
       setToast({
         message: err instanceof Error ? err.message : "Failed to delete user",
         type: "error",
       });
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -213,11 +227,12 @@ export function UsersPage() {
                 className: "text-right",
                 render: (r) => {
                   const isSelf = r.id === currentUser?.id;
+                  const isLoading = actionLoading === r.id;
                   return (
                     <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => handleRoleToggle(r)}
-                        disabled={isSelf}
+                        disabled={isSelf || isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
                         title={`Change to ${r.role === "admin" ? "user" : "admin"}`}
                       >
@@ -229,7 +244,7 @@ export function UsersPage() {
                       </button>
                       <button
                         onClick={() => handleToggleActive(r)}
-                        disabled={isSelf}
+                        disabled={isSelf || isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
                         title={r.is_active ? "Disable" : "Enable"}
                       >
@@ -241,11 +256,18 @@ export function UsersPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(r)}
-                        disabled={isSelf}
+                        disabled={isSelf || isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
                         title="Delete"
                       >
-                        <Trash2 size={18} />
+                        {isLoading ? (
+                          <svg className="animate-spin w-4.5 h-4.5" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        ) : (
+                          <Trash2 size={18} />
+                        )}
                       </button>
                     </div>
                   );

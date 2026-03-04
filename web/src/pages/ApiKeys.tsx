@@ -9,6 +9,7 @@ import {
   Badge,
   Toast,
   EmptyState,
+  CopyableText,
 } from "../components/ui";
 import {
   Key,
@@ -28,6 +29,7 @@ export function ApiKeysPage() {
   const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
@@ -55,7 +57,7 @@ export function ApiKeysPage() {
       const res = await adminApi.createKey({ name: newKeyName });
       setNewKeyResult(res.raw_key);
       setNewKeyName("");
-      fetchKeys();
+      await fetchKeys();
       setToast({ message: "API key created", type: "success" });
     } catch (err) {
       setToast({
@@ -68,26 +70,36 @@ export function ApiKeysPage() {
   };
 
   const handleToggle = async (key: ApiKeyRecord) => {
+    if (actionLoading !== null) return;
+    setActionLoading(key.id);
     try {
       await adminApi.updateKey(key.id, { is_active: !key.is_active });
-      fetchKeys();
+      await fetchKeys();
       setToast({
         message: `Key ${key.is_active ? "disabled" : "enabled"}`,
         type: "success",
       });
     } catch {
       setToast({ message: "Failed to update key", type: "error" });
+    } finally {
+      setActionLoading(null);
     }
   };
 
   const handleDelete = async (key: ApiKeyRecord) => {
     if (!confirm(`Delete key "${key.name}"?`)) return;
+    if (actionLoading !== null) return;
+    setActionLoading(key.id);
     try {
       await adminApi.deleteKey(key.id);
-      fetchKeys();
+      // Optimistic removal — immediately remove from UI, then refetch
+      setKeys((prev) => prev.filter((k) => k.id !== key.id));
+      await fetchKeys();
       setToast({ message: "Key deleted", type: "success" });
     } catch {
       setToast({ message: "Failed to delete key", type: "error" });
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -147,9 +159,11 @@ export function ApiKeysPage() {
                 key: "prefix",
                 title: "Prefix",
                 render: (r) => (
-                  <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">
-                    {r.prefix}
-                  </code>
+                  <CopyableText
+                    text={r.prefix}
+                    displayText={r.prefix}
+                    className="bg-slate-100 px-2 py-0.5 rounded"
+                  />
                 ),
               },
               {
@@ -183,28 +197,42 @@ export function ApiKeysPage() {
                 key: "actions",
                 title: "",
                 className: "text-right",
-                render: (r) => (
-                  <div className="flex items-center justify-end gap-1">
-                    <button
-                      onClick={() => handleToggle(r)}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-                      title={r.is_active ? "Disable" : "Enable"}
-                    >
-                      {r.is_active ? (
-                        <ToggleRight size={18} />
-                      ) : (
-                        <ToggleLeft size={18} />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleDelete(r)}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                      title="Delete"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                ),
+                render: (r) => {
+                  const isLoading = actionLoading === r.id;
+                  return (
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => handleToggle(r)}
+                        disabled={isLoading}
+                        className={`p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                          r.is_active
+                            ? "text-emerald-500 hover:text-amber-600 hover:bg-amber-50"
+                            : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
+                        }`}
+                        title={r.is_active ? "Disable" : "Enable"}
+                      >
+                        {isLoading ? (
+                          <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        ) : r.is_active ? (
+                          <ToggleRight size={22} className="text-emerald-500" />
+                        ) : (
+                          <ToggleLeft size={22} className="text-slate-400" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleDelete(r)}
+                        disabled={isLoading}
+                        className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Delete"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  );
+                },
               },
             ]}
             data={keys}

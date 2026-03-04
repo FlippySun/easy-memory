@@ -27,6 +27,7 @@ export function BansPage() {
     message: string;
     type: "success" | "error";
   } | null>(null);
+  const [actionLoading, setActionLoading] = useState<number | null>(null);
 
   const fetchBans = useCallback(async () => {
     try {
@@ -62,7 +63,7 @@ export function BansPage() {
         reason: "",
         duration_hours: "",
       });
-      fetchBans();
+      await fetchBans();
       setToast({ message: "Ban created", type: "success" });
     } catch (err) {
       setToast({
@@ -76,12 +77,17 @@ export function BansPage() {
 
   const handleDelete = async (ban: BanRecord) => {
     if (!confirm(`Remove ban for ${ban.target_value}?`)) return;
+    if (actionLoading !== null) return;
+    setActionLoading(ban.id);
     try {
       await adminApi.deleteBan(ban.id);
-      fetchBans();
+      setBans((prev) => prev.filter((b) => b.id !== ban.id));
+      await fetchBans();
       setToast({ message: "Ban removed", type: "success" });
     } catch {
       setToast({ message: "Failed to remove ban", type: "error" });
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -156,15 +162,26 @@ export function BansPage() {
                 key: "actions",
                 title: "",
                 className: "text-right",
-                render: (r) => (
-                  <button
-                    onClick={() => handleDelete(r)}
-                    className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                    title="Remove ban"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                ),
+                render: (r) => {
+                  const isLoading = actionLoading === r.id;
+                  return (
+                    <button
+                      onClick={() => handleDelete(r)}
+                      disabled={isLoading}
+                      className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Remove ban"
+                    >
+                      {isLoading ? (
+                        <svg className="animate-spin w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      ) : (
+                        <Trash2 size={18} />
+                      )}
+                    </button>
+                  );
+                },
               },
             ]}
             data={bans}
