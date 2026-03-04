@@ -7,7 +7,7 @@
  */
 
 import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { DATA_PATHS } from "./paths.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -23,8 +23,7 @@ export interface LogEntry {
  * 环境变量 LOG_FALLBACK_PATH 可覆盖默认值。
  */
 const FALLBACK_LOG_PATH =
-  process.env.LOG_FALLBACK_PATH ??
-  join(process.env.HOME ?? "/tmp", ".easy-memory-fallback.log");
+  process.env.LOG_FALLBACK_PATH ?? DATA_PATHS.fallbackLog;
 
 /**
  * 向 stderr 写入 JSON 格式日志行。

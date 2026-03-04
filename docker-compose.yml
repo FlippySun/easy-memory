@@ -37,6 +37,9 @@ services:
       - TRUST_PROXY=${TRUST_PROXY:-false}
       - REQUIRE_TLS=${REQUIRE_TLS:-false}
       - DEFAULT_PROJECT=${DEFAULT_PROJECT:-default}
+      - DATA_DIR=/data
+    volumes:
+      - easy_memory_data:/data
     depends_on:
       qdrant:
         condition: service_healthy
@@ -117,3 +120,4 @@ services:
 volumes:
   qdrant_data:
   ollama_data:
+  easy_memory_data:

@@ -18,8 +18,8 @@
 
 import { appendFile, stat, rename } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { log } from "../utils/logger.js";
+import { DATA_PATHS } from "../utils/paths.js";
 import type {
   AuditLogEntry,
   AuditOperation,
@@ -76,9 +76,7 @@ export class AuditService {
   private lastFlushAt = 0;
 
   constructor(config: AuditServiceConfig = {}) {
-    this.logPath =
-      config.logPath ??
-      join(process.env.HOME ?? "/tmp", ".easy-memory-audit.jsonl");
+    this.logPath = config.logPath ?? DATA_PATHS.auditLog;
     this.flushIntervalMs = config.flushIntervalMs ?? 1000;
     this.maxBufferSize = config.maxBufferSize ?? 100;
     this.maxFileSizeBytes = config.maxFileSizeBytes ?? 50 * 1024 * 1024; // 50MB

@@ -16,8 +16,8 @@
 
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
+import { DATA_PATHS } from "../utils/paths.js";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
-import { join } from "node:path";
 import { log } from "../utils/logger.js";
 import type {
   ApiKeyRecord,
@@ -122,9 +122,7 @@ export class ApiKeyManager {
 
   constructor(config: ApiKeyManagerConfig = {}) {
     this.config = {
-      dbPath:
-        config.dbPath ??
-        join(process.env.HOME ?? "/tmp", ".easy-memory-admin.db"),
+      dbPath: config.dbPath ?? DATA_PATHS.adminDb,
       keyPrefix: config.keyPrefix ?? "em_",
     };
   }
@@ -589,9 +587,7 @@ export class ApiKeyManager {
   /**
    * 列出指定用户的 API Keys (含吊销的)。
    */
-  listKeysByUser(
-    userId: number,
-  ): ApiKeyResponse[] {
+  listKeysByUser(userId: number): ApiKeyResponse[] {
     this.ensureOpen();
     const rows = this.db!.prepare(
       "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",

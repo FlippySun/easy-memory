@@ -41,6 +41,9 @@ FROM node:20-alpine AS runtime
 RUN addgroup -g 1001 -S easymem && \
     adduser -S easymem -u 1001 -G easymem
 
+# Persistent data directory — must be volume-mounted to survive container recreate
+RUN mkdir -p /data && chown easymem:easymem /data
+
 WORKDIR /app
 
 # Copy production artifacts only
@@ -58,6 +61,7 @@ LABEL org.opencontainers.image.title="Easy Memory" \
 ENV EASY_MEMORY_MODE=http \
     HTTP_HOST=0.0.0.0 \
     HTTP_PORT=3080 \
+    DATA_DIR=/data \
     NODE_ENV=production
 
 EXPOSE 3080

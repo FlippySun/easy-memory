@@ -16,8 +16,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
 import { log } from "../utils/logger.js";
+import { DATA_PATHS } from "../utils/paths.js";
 import type {
   RuntimeConfig,
   UpdateRuntimeConfigInput,
@@ -58,9 +58,7 @@ export class RuntimeConfigManager {
   private listeners: RuntimeConfigChangeListener[] = [];
 
   constructor(options: RuntimeConfigManagerOptions) {
-    this.configPath =
-      options.configPath ??
-      join(process.env.HOME ?? "/tmp", ".easy-memory-runtime-config.json");
+    this.configPath = options.configPath ?? DATA_PATHS.runtimeConfig;
     this.defaults = { ...options.defaults };
 
     // 加载持久化的覆盖

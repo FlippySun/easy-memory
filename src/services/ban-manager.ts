@@ -18,8 +18,8 @@
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { log } from "../utils/logger.js";
+import { DATA_PATHS } from "../utils/paths.js";
 import type {
   BanRecord,
   BanResponse,
@@ -84,9 +84,7 @@ export class BanManager {
   private stmtGetBanById: BetterSqlite3.Statement | null = null;
 
   constructor(config: BanManagerConfig = {}) {
-    this.dbPath =
-      config.dbPath ??
-      join(process.env.HOME ?? "/tmp", ".easy-memory-admin.db");
+    this.dbPath = config.dbPath ?? DATA_PATHS.adminDb;
   }
 
   // =========================================================================

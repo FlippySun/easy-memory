@@ -19,8 +19,8 @@
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { log } from "../utils/logger.js";
+import { DATA_PATHS } from "../utils/paths.js";
 import type {
   AuditLogEntry,
   AuditOperation,
@@ -153,12 +153,8 @@ export class AnalyticsService {
 
   constructor(config: AnalyticsServiceConfig = {}) {
     this.config = {
-      dbPath:
-        config.dbPath ??
-        join(process.env.HOME ?? "/tmp", ".easy-memory-analytics.db"),
-      auditLogPath:
-        config.auditLogPath ??
-        join(process.env.HOME ?? "/tmp", ".easy-memory-audit.jsonl"),
+      dbPath: config.dbPath ?? DATA_PATHS.analyticsDb,
+      auditLogPath: config.auditLogPath ?? DATA_PATHS.auditLog,
       aggregationIntervalMs: config.aggregationIntervalMs ?? 3_600_000,
       rawRetentionDays: config.rawRetentionDays ?? 30,
       hourlyRetentionDays: config.hourlyRetentionDays ?? 7,
