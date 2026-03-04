@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import {
   bearerAuth,
+  bearerAuthSimple,
   globalErrorHandler,
   requestLogger,
   tlsEnforcement,
@@ -14,13 +15,76 @@ import {
 } from "../../src/api/middlewares.js";
 
 // =========================================================================
-// bearerAuth
+// Mock factories for bearerAuth dual-auth tests
+// =========================================================================
+
+function createMockApiKeyManager(
+  overrides: Partial<{
+    validateKey: ReturnType<typeof vi.fn>;
+    recordUsage: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
+  return {
+    validateKey: overrides.validateKey ?? vi.fn().mockReturnValue(null),
+    recordUsage: overrides.recordUsage ?? vi.fn(),
+    // stubs for unused methods
+    open: vi.fn(),
+    close: vi.fn(),
+    getDatabase: vi.fn().mockReturnValue(null),
+    createKey: vi.fn(),
+    listKeys: vi.fn(),
+    getKey: vi.fn(),
+    revokeKey: vi.fn(),
+    rotateKey: vi.fn(),
+    updateKey: vi.fn(),
+    recordAdminAction: vi.fn(),
+    getAdminActions: vi.fn(),
+  } as any;
+}
+
+function createMockBanManager(
+  overrides: Partial<{
+    isKeyBanned: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
+  return {
+    isKeyBanned:
+      overrides.isKeyBanned ?? vi.fn().mockReturnValue({ banned: false }),
+    isIpBanned: vi.fn().mockReturnValue({ banned: false }),
+    open: vi.fn(),
+    close: vi.fn(),
+  } as any;
+}
+
+function createMockRateLimiter(
+  overrides: Partial<{
+    checkPerKeyRate: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
+  return {
+    checkPerKeyRate: overrides.checkPerKeyRate ?? vi.fn(),
+    checkRate: vi.fn(),
+    getStats: vi.fn(),
+  } as any;
+}
+
+// =========================================================================
+// bearerAuth (dual-auth)
 // =========================================================================
 
 describe("bearerAuth", () => {
-  it("should pass when authToken is empty (dev mode)", async () => {
+  it("should pass when masterToken is empty (dev mode)", async () => {
     const app = new Hono();
-    app.use("*", bearerAuth(""));
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "",
+        apiKeyManager: createMockApiKeyManager(),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
     app.get("/test", (c) => c.json({ ok: true }));
 
     const res = await app.request("/test");
@@ -29,7 +93,16 @@ describe("bearerAuth", () => {
 
   it("should reject missing Authorization header", async () => {
     const app = new Hono();
-    app.use("*", bearerAuth("secret"));
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "secret",
+        apiKeyManager: createMockApiKeyManager(),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
     app.get("/test", (c) => c.json({ ok: true }));
 
     const res = await app.request("/test");
@@ -38,9 +111,18 @@ describe("bearerAuth", () => {
     expect(body.error).toContain("Missing Authorization");
   });
 
-  it("should reject invalid token", async () => {
+  it("should reject invalid token (neither master nor managed key)", async () => {
     const app = new Hono();
-    app.use("*", bearerAuth("secret"));
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "secret",
+        apiKeyManager: createMockApiKeyManager(),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
     app.get("/test", (c) => c.json({ ok: true }));
 
     const res = await app.request("/test", {
@@ -49,9 +131,18 @@ describe("bearerAuth", () => {
     expect(res.status).toBe(401);
   });
 
-  it("should accept valid Bearer token", async () => {
+  it("should accept valid master Bearer token", async () => {
     const app = new Hono();
-    app.use("*", bearerAuth("my-secret"));
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "my-secret",
+        apiKeyManager: createMockApiKeyManager(),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
     app.get("/test", (c) => c.json({ ok: true }));
 
     const res = await app.request("/test", {
@@ -62,13 +153,145 @@ describe("bearerAuth", () => {
 
   it("should reject Basic auth scheme", async () => {
     const app = new Hono();
-    app.use("*", bearerAuth("secret"));
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "secret",
+        apiKeyManager: createMockApiKeyManager(),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
     app.get("/test", (c) => c.json({ ok: true }));
 
     const res = await app.request("/test", {
       headers: { Authorization: "Basic dXNlcjpwYXNz" },
     });
     expect(res.status).toBe(401);
+  });
+
+  it("should accept valid managed API key", async () => {
+    const mockRecord = {
+      id: "key-123",
+      key_hash: "abcdef1234567890",
+      rate_limit_per_minute: null,
+    };
+    const app = new Hono();
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "master-secret",
+        apiKeyManager: createMockApiKeyManager({
+          validateKey: vi.fn().mockReturnValue(mockRecord),
+        }),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
+    app.get("/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/test", {
+      headers: { Authorization: "Bearer em_managed-key-value" },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should reject banned API key", async () => {
+    const mockRecord = {
+      id: "key-123",
+      key_hash: "abcdef1234567890",
+      rate_limit_per_minute: null,
+    };
+    const app = new Hono();
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "master-secret",
+        apiKeyManager: createMockApiKeyManager({
+          validateKey: vi.fn().mockReturnValue(mockRecord),
+        }),
+        banManager: createMockBanManager({
+          isKeyBanned: vi
+            .fn()
+            .mockReturnValue({ banned: true, reason: "abuse" }),
+        }),
+        rateLimiter: createMockRateLimiter(),
+        trustProxy: false,
+      }),
+    );
+    app.get("/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/test", {
+      headers: { Authorization: "Bearer em_managed-key-value" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("should reject per-key rate-limited API key", async () => {
+    const mockRecord = {
+      id: "key-123",
+      key_hash: "abcdef1234567890",
+      rate_limit_per_minute: 10,
+    };
+    const app = new Hono();
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "master-secret",
+        apiKeyManager: createMockApiKeyManager({
+          validateKey: vi.fn().mockReturnValue(mockRecord),
+        }),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter({
+          checkPerKeyRate: vi.fn().mockImplementation(() => {
+            throw new Error("Rate limit exceeded");
+          }),
+        }),
+        trustProxy: false,
+      }),
+    );
+    app.get("/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/test", {
+      headers: { Authorization: "Bearer em_managed-key-value" },
+    });
+    expect(res.status).toBe(429);
+  });
+
+  it("should re-throw non-rate-limit errors from checkPerKeyRate (P7-FIX)", async () => {
+    const mockRecord = {
+      id: "key-123",
+      key_hash: "abcdef1234567890",
+      rate_limit_per_minute: 10,
+    };
+    const app = new Hono();
+    // globalErrorHandler 将未知异常转为 500
+    app.onError(globalErrorHandler);
+    app.use(
+      "*",
+      bearerAuth({
+        masterToken: "master-secret",
+        apiKeyManager: createMockApiKeyManager({
+          validateKey: vi.fn().mockReturnValue(mockRecord),
+        }),
+        banManager: createMockBanManager(),
+        rateLimiter: createMockRateLimiter({
+          checkPerKeyRate: vi.fn().mockImplementation(() => {
+            throw new TypeError("Cannot read properties of undefined");
+          }),
+        }),
+        trustProxy: false,
+      }),
+    );
+    app.get("/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/test", {
+      headers: { Authorization: "Bearer em_managed-key-value" },
+    });
+    // 内部 bug 应得到 500 而非 429
+    expect(res.status).toBe(500);
   });
 });
 

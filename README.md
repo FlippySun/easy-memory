@@ -284,10 +284,160 @@ curl http://your-server:3080/health
 ```bash
 docker pull thj8632/easy-memory:latest
 # 或指定版本
-docker pull thj8632/easy-memory:0.1.0
+docker pull thj8632/easy-memory:0.2.1
 ```
 
 支持平台：`linux/amd64`, `linux/arm64`
+
+---
+
+## VPS 生产部署
+
+### 前置条件
+
+| 需求     | 说明                                         |
+| -------- | -------------------------------------------- |
+| VPS      | 2C/4G+ 内存（Ollama bge-m3 需 ~2G）         |
+| 域名     | A 记录解析到 VPS IP                          |
+| Docker   | Docker ≥ 24 + Docker Compose v2              |
+| 端口     | 80/443 对外开放（反向代理用）                |
+
+### 1. 部署服务
+
+```bash
+# 克隆代码
+git clone https://github.com/FlippySun/easy-memory.git
+cd easy-memory
+
+# 配置环境变量
+cp .env.example .env
+vim .env
+# 必须设置:
+#   QDRANT_API_KEY=<强随机密钥>
+#   HTTP_AUTH_TOKEN=<Master Token — 管理员自用>
+#   ADMIN_TOKEN=<Admin Token — 管理后台>
+
+# 启动
+docker compose -f docker-compose.prod.yml up -d
+
+# 验证
+curl http://localhost:3080/health
+# {"status":"ok","mode":"http"}
+```
+
+### 2. 反向代理 (HTTPS)
+
+#### Caddy（推荐 — 自动 HTTPS）
+
+```bash
+cp deploy/Caddyfile.example /etc/caddy/Caddyfile
+# 编辑: 替换 memory.example.com 为实际域名
+sudo systemctl reload caddy
+```
+
+#### Nginx（手动证书）
+
+```bash
+cp deploy/nginx.conf.example /etc/nginx/conf.d/easy-memory.conf
+# 编辑: 替换域名, 配置 SSL 证书
+sudo certbot --nginx -d memory.example.com
+sudo nginx -s reload
+```
+
+### 3. 三层认证架构
+
+```
+ADMIN_TOKEN（管理员）
+  └─ 管理后台 /api/admin/*
+  └─ 创建/吊销 Managed API Key
+  └─ 查看 Analytics / Audit 数据
+
+HTTP_AUTH_TOKEN（Master Token）
+  └─ 直接访问所有 MCP 工具
+  └─ 无 per-key rate limit 限制
+
+Managed API Key（分发给普通用户）
+  └─ Admin 通过 POST /api/admin/keys 创建
+  └─ 可设置 rate limit、project 隔离
+  └─ 可随时吊销/轮转
+```
+
+### 4. 用户管理
+
+#### 管理员为用户创建 Token
+
+```bash
+curl -X POST https://memory.example.com/api/admin/keys \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "user-alice",
+    "scopes": ["memory_save", "memory_search", "memory_forget", "memory_status"],
+    "rate_limit": 30,
+    "project": "alice-project"
+  }'
+# 返回: { "id": "...", "key": "em_abc123...", "name": "user-alice" }
+# ⚠️ key 仅此一次返回，请安全保存并发给用户
+```
+
+#### 用户配置远程 MCP（SSE 模式）
+
+VS Code / Cursor — 编辑 `.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "easy-memory": {
+      "type": "sse",
+      "url": "https://memory.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer em_abc123..."
+      }
+    }
+  }
+}
+```
+
+JetBrains IDE — 添加 MCP Server：
+
+```json
+{
+  "mcpServers": {
+    "easy-memory": {
+      "url": "https://memory.example.com/sse",
+      "headers": { "Authorization": "Bearer em_abc123..." }
+    }
+  }
+}
+```
+
+> **Note:** Claude Desktop 不原生支持 SSE 远端连接，需使用本地 stdio 桥接。
+
+### 5. Admin API
+
+所有 Admin API 需要 `ADMIN_TOKEN` 认证：
+
+```
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+| 功能         | 方法       | 路径                           |
+| ------------ | ---------- | ------------------------------ |
+| 创建 Key     | `POST`     | `/api/admin/keys`              |
+| 列出全部 Key | `GET`      | `/api/admin/keys`              |
+| 查看 Key     | `GET`      | `/api/admin/keys/:id`          |
+| 更新 Key     | `PATCH`    | `/api/admin/keys/:id`          |
+| 吊销 Key     | `DELETE`   | `/api/admin/keys/:id`          |
+| 轮换 Key     | `POST`     | `/api/admin/keys/:id/rotate`   |
+| 封禁 IP      | `POST`     | `/api/admin/bans`              |
+| 列出 IP 封禁 | `GET`      | `/api/admin/bans`              |
+| 解封 IP      | `DELETE`   | `/api/admin/bans/:ip`          |
+| 系统总览     | `GET`      | `/api/admin/analytics/overview`|
+| 用户用量     | `GET`      | `/api/admin/analytics/users`   |
+| 搜索命中率   | `GET`      | `/api/admin/analytics/hit-rate`|
+| 审计日志     | `GET`      | `/api/admin/audit/logs`        |
+| 导出日志     | `GET`      | `/api/admin/audit/export`      |
+| 运行时配置   | `GET/PATCH`| `/api/admin/config`            |
 
 ---
 
@@ -312,6 +462,7 @@ docker pull thj8632/easy-memory:0.1.0
 | `HTTP_AUTH_TOKEN`       | —                        | HTTP API Bearer Token                                      |
 | `TRUST_PROXY`           | `false`                  | 信任反向代理 X-Forwarded-\* 头                             |
 | `REQUIRE_TLS`           | `false`                  | 拒绝非 HTTPS 请求（需 TRUST_PROXY=true）                   |
+| `ADMIN_TOKEN`           | —                        | Admin API Token（留空则禁用管理后台）                      |
 | `RATE_LIMIT_PER_MINUTE` | `60`                     | 全局速率限制（次/分钟）                                    |
 | `GEMINI_MAX_PER_HOUR`   | `200`                    | Gemini 每小时最大调用数                                    |
 | `GEMINI_MAX_PER_DAY`    | `2000`                   | Gemini 每日最大调用数                                      |
@@ -350,7 +501,7 @@ GEMINI_REGION=us-central1          # 可选，默认 us-central1
 pnpm install          # 安装依赖
 pnpm build            # TypeScript 编译
 pnpm typecheck        # 类型检查
-pnpm test             # 单元测试 (404 tests)
+pnpm test             # 单元测试 (786 tests)
 pnpm test:e2e         # E2E 测试 (需要 Qdrant + Ollama)
 ```
 
@@ -361,16 +512,23 @@ src/
 ├── index.ts              # 入口 — 双模式路由
 ├── container.ts          # 依赖注入容器
 ├── api/                  # HTTP Shell (Hono)
-│   ├── server.ts
+│   ├── server.ts         # HTTP 路由 + 审计中间件
+│   ├── admin-routes.ts   # Admin API (Key/Ban/Analytics/Audit/Config)
+│   ├── admin-auth.ts     # Admin Token 鉴权
 │   ├── schemas.ts
-│   └── middlewares.ts
+│   └── middlewares.ts    # 双层鉴权 (Master + API Key)
 ├── mcp/                  # MCP Shell (stdio)
 │   └── server.ts
 ├── services/             # 核心服务
 │   ├── qdrant.ts         # Qdrant 向量数据库
 │   ├── embedding.ts      # Embedding 编排 (多引擎 fallback)
 │   ├── embedding-providers.ts  # Ollama/Gemini Provider
-│   └── bm25.ts           # BM25 稀疏向量 (混合检索)
+│   ├── bm25.ts           # BM25 稀疏向量 (混合检索)
+│   ├── analytics.ts      # SQLite 用量分析聚合
+│   ├── audit.ts          # JSONL 审计日志 (缓冲写入)
+│   ├── api-key-manager.ts # API Key 管理 (SHA-256 哈希)
+│   ├── ban-manager.ts    # IP/Key 封禁
+│   └── runtime-config.ts # 运行时配置管理
 ├── tools/                # MCP Tool 处理器
 │   ├── save.ts
 │   ├── search.ts
@@ -379,12 +537,15 @@ src/
 ├── transport/            # 安全 stdio 传输
 │   └── SafeStdioTransport.ts
 ├── types/                # Schema & 类型
-│   └── schema.ts
+│   ├── schema.ts         # MCP 数据契约
+│   ├── admin-schema.ts   # Admin API Schema
+│   └── audit-schema.ts   # 审计日志 Schema
 └── utils/                # 工具
     ├── hash.ts           # SHA-256 去重
     ├── logger.ts         # stderr JSON 日志
     ├── sanitize.ts       # 内容脱敏
-    ├── rate-limiter.ts   # 速率限制
+    ├── rate-limiter.ts   # 速率限制 (全局 + Per-Key)
+    ├── ip.ts             # 代理感知 IP 提取
     └── shutdown.ts       # 优雅关闭
 ```
 
@@ -393,6 +554,7 @@ src/
 ## 架构文档
 
 - [FEASIBILITY-ANALYSIS.md](FEASIBILITY-ANALYSIS.md) — 架构决策记录 (ADR)
+- [AUDIT-LOGGING-WHITEPAPER.md](AUDIT-LOGGING-WHITEPAPER.md) — 后处理架构白皮书（鉴权·审计·管控）
 - [CORE_SCHEMA.md](CORE_SCHEMA.md) — 数据契约与绝对红线
 - [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) — 多端接入与 Prompt 调教
 

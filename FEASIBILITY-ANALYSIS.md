@@ -8703,3 +8703,122 @@ function tokenizeCJK(text: string): string[] {
 ---
 
 _本 ADR 由第九轮 Hybrid Search Architecture Review 生成。核心变更：nomic-embed-text→bge-m3 模型升级 + TypeScript BM25 稀疏编码器 + Qdrant Named Vectors + Prefetch/RRF 混合搜索 + 可选 Reranker Python Sidecar。共 10 条对抗性审查质疑 (HYB-1 至 HYB-10)，均已提出缓解方案。_
+
+---
+
+## Phase 2 — 后处理架构：多租户鉴权·审计日志·运维管控
+
+> **日期**: 2026-03-04  
+> **完整白皮书**: [AUDIT-LOGGING-WHITEPAPER.md](./AUDIT-LOGGING-WHITEPAPER.md)  
+> **适用范围**: HTTP API 模式（VPS 远端部署），MCP stdio 模式不受影响
+
+### 概述
+
+在 Phase 1（CRUD + 混合搜索）稳定运行的基础上，Phase 2 针对 VPS 远端部署的 HTTP API 模式引入完整的"后处理"能力体系，覆盖以下 6 个维度：
+
+1. **多租户 API Key 鉴权** — 替代单一静态 Bearer Token
+2. **RBAC 权限控制** — admin / user / readonly 三级角色
+3. **多层限流与配额** — 全局 + Per-Key 滑动窗口 + 日配额
+4. **IP / Key 封禁** — 代理感知 IP 提取 + CIDR 支持
+5. **统一审计日志** — JSONL + SQLite 双通道、全操作覆盖
+6. **用量分析与 Admin API** — 命中率/延迟/用量聚合 + RESTful 管控端点
+
+### 核心技术决策 (ADR)
+
+| ADR 编号     | 决策                                  | 原因                                     |
+| ------------ | ------------------------------------- | ---------------------------------------- |
+| ADR-AUDIT-01 | SHA-256 (非 bcrypt) 哈希 API Key      | 高熵 Key 原像不可行 + 热路径延迟不可接受 |
+| ADR-AUDIT-02 | SQLite + better-sqlite3 (非 Redis/PG) | 单机零依赖 + 同步 API + SQL 查询         |
+| ADR-AUDIT-03 | 审计日志 JSONL + SQLite 双通道        | JSONL 原子 append + SQLite 结构化查询    |
+| ADR-AUDIT-04 | Per-Key 限流内存 Map + LRU            | 热路径 μs 级 + 重启后无持久化需求        |
+| ADR-AUDIT-05 | Admin API 同端口 `/admin/*`           | 减少部署复杂度 + RBAC 隔离               |
+| ADR-AUDIT-06 | X-Real-IP 优先于 XFF                  | 防伪造链攻击                             |
+| ADR-AUDIT-07 | content 审计仅 preview + hash         | 最小权限原则 + 全文在 Qdrant             |
+
+### API Key 格式
+
+```
+em_{role}_{crypto.randomBytes(32).hex}   // 总长 67-73 字符
+     │       └── 256-bit 高熵随机段
+     └── admin_ / user_ / ro_
+```
+
+存储: SHA-256 哈希 → SQLite `api_keys` 表，永不存储明文。
+
+### 新增中间件流水线
+
+```
+IP Ban Check → Global Rate Limit → Auth + Key Lookup → Per-Key RL + Quota → RBAC → Audit → Business
+```
+
+### 新增存储
+
+- **SQLite** (`better-sqlite3`): API Keys / IP Bans / Audit Logs / Analytics / Config Overrides
+- **JSONL**: 审计日志主存储 (append-only, fire-and-forget)
+- **Docker volume**: `/data/easy-memory.db` + `/data/audit.jsonl`
+
+### Admin API 路由总表
+
+| 类别     | 端点                                | 描述                                                |
+| -------- | ----------------------------------- | --------------------------------------------------- |
+| Key 管理 | `POST/GET/PATCH/DELETE /admin/keys` | CRUD + ban/unban/rotate                             |
+| IP 封禁  | `POST/GET/DELETE /admin/bans/ip`    | IP Ban CRUD                                         |
+| 用量分析 | `GET /admin/analytics/*`            | overview, users, projects, timeline, search-quality |
+| 审计日志 | `GET /admin/audit/logs\|export`     | 查询 + 导出 (JSONL/CSV)                             |
+| 系统配置 | `GET/PATCH /admin/system/config`    | 运行时配置                                          |
+
+### 实施估算
+
+| 阶段     | 内容               | 工时     |
+| -------- | ------------------ | -------- |
+| Phase 2A | 鉴权 + 审计 (MVP)  | ~26h     |
+| Phase 2B | 限流增强 + IP 封禁 | ~14h     |
+| Phase 2C | 分析 + Admin API   | ~20h     |
+| **合计** |                    | **~60h** |
+
+### 不受影响的组件
+
+- MCP stdio 模式 — 物理隔离，无变更
+- Qdrant / Embedding / BM25 — 核心存储与检索不变
+- `basicSanitize` / boundary markers / injection detection — 安全管道不变
+
+> 详细的 TypeScript 接口定义、SQLite Schema、安全威胁模型、部署配置请参阅完整白皮书 [AUDIT-LOGGING-WHITEPAPER.md](./AUDIT-LOGGING-WHITEPAPER.md)。
+
+---
+
+## 决策日志: Phase 2 实施完成 (2026-03-04)
+
+### 实施状态
+
+**Phase 2 全部实施完成**，经过 Phase 1 全量代码深度审查 + 多 Sub-Agent 交叉审查后实施。
+
+| 项目                 | 状态     | 备注                                              |
+| -------------------- | -------- | ------------------------------------------------- |
+| TypeScript 编译      | ✅ CLEAN | `tsc --noEmit` 零错误                             |
+| 单元测试             | ✅ 通过  | 30 个文件, 786 个测试用例全部通过                 |
+| AuditService         | ✅ 完成  | JSONL 缓冲写入 + 轮转, fire-and-forget            |
+| AnalyticsService     | ✅ 完成  | SQLite WAL + JSONL 增量导入 + 定时聚合            |
+| ApiKeyManager        | ✅ 完成  | SHA-256 哈希 + 内存缓存 + Prepared Statements     |
+| BanManager           | ✅ 完成  | 内存热路径 + SQLite 持久化 + CIDR 匹配            |
+| RuntimeConfigManager | ✅ 完成  | JSON 文件持久化 + defaults 合并                   |
+| Admin Routes         | ✅ 完成  | 856 行, Key/Ban/Analytics/Audit/Config CRUD       |
+| bearerAuth 双层鉴权  | ✅ 完成  | Master Token + Managed API Key + Per-key 限流     |
+| 审计中间件           | ✅ 完成  | 内联 server.ts, try/finally 双写 (JSONL + SQLite) |
+| Per-key 限流         | ✅ 完成  | RateLimiter.checkPerKeyRate() + LRU 驱逐          |
+| IP 提取工具          | ✅ 完成  | getClientIp(c, trustProxy) 代理感知               |
+
+### 实施偏差记录
+
+| 原规划                         | 实际实现                             | 原因                 | ADR          |
+| ------------------------------ | ------------------------------------ | -------------------- | ------------ |
+| `auth-middleware.ts` 独立文件  | `middlewares.ts::bearerAuth(config)` | 减少文件碎片化       | ADR-AUDIT-08 |
+| `audit-middleware.ts` 独立文件 | `server.ts` 内联中间件               | 与路由上下文紧密耦合 | ADR-AUDIT-08 |
+| `PerKeyRateLimiter` 独立类     | `RateLimiter.checkPerKeyRate()`      | 避免状态分裂         | ADR-AUDIT-08 |
+| `client-ip.ts`                 | `ip.ts::getClientIp()`               | 简化命名             | ADR-AUDIT-08 |
+
+### 安全修复
+
+| 编号   | 问题                                | 修复                                | ADR          |
+| ------ | ----------------------------------- | ----------------------------------- | ------------ |
+| P7-FIX | Per-key catch 过宽 → 吞没非限流 bug | 收窄至仅 "Rate limit exceeded" 异常 | ADR-AUDIT-09 |
+| P8-FIX | 关闭序列无容错 → 第一个失败阻塞后续 | 每个 close() 独立 try-catch         | ADR-AUDIT-10 |

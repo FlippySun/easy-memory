@@ -31,6 +31,7 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     httpHost: "127.0.0.1",
     trustProxy: false,
     requireTls: false,
+    adminToken: "test-admin-token",
     ...overrides,
   };
 
@@ -77,6 +78,128 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     } as any,
     bm25: {
       encode: vi.fn().mockReturnValue({ indices: [100], values: [1.0] }),
+    } as any,
+    audit: {
+      recordEvent: vi.fn(),
+      getStats: vi.fn().mockReturnValue({
+        total_events: 0,
+        buffer_size: 0,
+        events_written: 0,
+        write_errors: 0,
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as any,
+    analytics: {
+      isReady: true,
+      recordEvent: vi.fn(),
+      queryEvents: vi
+        .fn()
+        .mockReturnValue({
+          data: [],
+          pagination: {
+            page: 1,
+            page_size: 50,
+            total_count: 0,
+            total_pages: 0,
+          },
+        }),
+      queryRollups: vi.fn().mockReturnValue([]),
+      exportEvents: vi.fn().mockReturnValue([]),
+      getUserUsage: vi.fn().mockReturnValue([]),
+      getProjectUsage: vi.fn().mockReturnValue([]),
+      getErrorRate: vi
+        .fn()
+        .mockReturnValue({
+          total_requests: 0,
+          error_count: 0,
+          error_rate: 0,
+          rate_limited_count: 0,
+          rejected_count: 0,
+        }),
+      getHitRate: vi
+        .fn()
+        .mockReturnValue({
+          total_searches: 0,
+          hit_count: 0,
+          miss_count: 0,
+          hit_rate: 0,
+        }),
+      runAggregation: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn(),
+    } as any,
+    apiKeyManager: {
+      open: vi.fn(),
+      close: vi.fn(),
+      createKey: vi.fn(),
+      getKeyById: vi.fn(),
+      getKeyByHash: vi.fn(),
+      validateKey: vi.fn(),
+      listKeys: vi
+        .fn()
+        .mockReturnValue({
+          data: [],
+          pagination: {
+            page: 1,
+            page_size: 20,
+            total_count: 0,
+            total_pages: 0,
+          },
+        }),
+      updateKey: vi.fn(),
+      revokeKey: vi.fn(),
+      rotateKey: vi.fn(),
+      recordUsage: vi.fn(),
+      recordAdminAction: vi.fn(),
+      listAdminActions: vi
+        .fn()
+        .mockReturnValue({
+          data: [],
+          pagination: {
+            page: 1,
+            page_size: 50,
+            total_count: 0,
+            total_pages: 0,
+          },
+        }),
+      hashKey: vi.fn().mockReturnValue("mocked-hash"),
+    } as any,
+    banManager: {
+      open: vi.fn(),
+      close: vi.fn(),
+      createBan: vi.fn(),
+      removeBan: vi.fn(),
+      getBanById: vi.fn(),
+      listBans: vi
+        .fn()
+        .mockReturnValue({
+          data: [],
+          pagination: {
+            page: 1,
+            page_size: 20,
+            total_count: 0,
+            total_pages: 0,
+          },
+        }),
+      isKeyBanned: vi.fn().mockReturnValue({ banned: false }),
+      isIpBanned: vi.fn().mockReturnValue({ banned: false }),
+    } as any,
+    runtimeConfig: {
+      getConfig: vi.fn().mockReturnValue({
+        rate_limit_per_minute: 60,
+        gemini_max_per_hour: 200,
+        gemini_max_per_day: 2000,
+        default_project: "test-project",
+        require_tls: false,
+        audit_enabled: true,
+        raw_retention_days: 30,
+        hourly_retention_days: 7,
+        daily_retention_days: 90,
+      }),
+      getDefaults: vi.fn().mockReturnValue({}),
+      getOverrides: vi.fn().mockReturnValue({}),
+      updateConfig: vi.fn().mockReturnValue({}),
+      resetConfig: vi.fn().mockReturnValue({}),
+      isOverridden: vi.fn().mockReturnValue(false),
     } as any,
   };
 }
