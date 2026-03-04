@@ -9,6 +9,9 @@
 # --------------- Stage 1: Build ---------------
 FROM node:20-alpine AS builder
 
+# CI mode: prevent TTY prompts from pnpm
+ENV CI=true
+
 # pnpm via corepack
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
