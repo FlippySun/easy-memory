@@ -38,8 +38,13 @@
 // Configuration
 // =========================================================================
 
-const BASE_URL = "https://memory.zhiz.chat";
-const AUTH_TOKEN = "REDACTED-TOKEN";
+const BASE_URL = process.env.E2E_BASE_URL || "https://memory.zhiz.chat";
+const AUTH_TOKEN = process.env.E2E_AUTH_TOKEN;
+if (!AUTH_TOKEN) {
+  console.error("ERROR: E2E_AUTH_TOKEN environment variable is required.");
+  console.error("Set it via: export E2E_AUTH_TOKEN=<your-token>");
+  process.exit(1);
+}
 const TEST_PROJECT = `__e2e_remote_${Date.now()}`;
 
 // =========================================================================

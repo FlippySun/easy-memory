@@ -28,6 +28,15 @@ Thumbs.db
 secrets.json
 .npmrc
 
+# Whitepapers & Internal Docs (仅保留 README.md 和 CHANGELOG.md)
+AUDIT-LOGGING-WHITEPAPER.md
+CORE_SCHEMA.md
+FEASIBILITY-ANALYSIS.md
+INTEGRATION_GUIDE.md
+RELEASE_CHECKLIST.md
+shell-interfaces-constraints.md
+test.md
+
 # Test coverage
 coverage/
 
