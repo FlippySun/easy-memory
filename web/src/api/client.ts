@@ -1,6 +1,7 @@
 /**
  * API 客户端 — 统一的 HTTP 请求封装。
- * 自动注入 JWT token，处理 401 自动登出。
+ * SEC-COOKIE: JWT 通过 httpOnly cookie 传递，不再使用 localStorage。
+ * 自动处理 401 → 尝试 refresh → 失败则跳转登录。
  */
 
 const API_BASE = "/api";
@@ -16,28 +17,75 @@ export class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
-  return localStorage.getItem("token");
+// =====================================================================
+// Token Refresh 机制 — 防止并发 refresh 竞态
+// =====================================================================
+
+/** 是否正在刷新中 */
+let isRefreshing = false;
+/** 排队等待 refresh 完成的请求 */
+let refreshQueue: Array<{
+  resolve: (value: boolean) => void;
+}> = [];
+
+/**
+ * 尝试通过 refresh token 续签 access token。
+ * 使用锁机制防止多个并发 401 同时触发 refresh。
+ * @returns true 如果 refresh 成功，false 如果失败（需要重新登录）
+ */
+async function tryRefresh(): Promise<boolean> {
+  if (isRefreshing) {
+    // 已有 refresh 请求正在飞行 — 排队等待结果
+    return new Promise<boolean>((resolve) => {
+      refreshQueue.push({ resolve });
+    });
+  }
+
+  isRefreshing = true;
+
+  // C2 FIX: 超时控制 — 防止网关挂起导致全局 API 死锁
+  const controller = new AbortController();
+  const refreshTimeout = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      signal: controller.signal,
+    });
+
+    const success = res.ok;
+
+    // 通知所有排队的请求
+    refreshQueue.forEach((q) => q.resolve(success));
+    refreshQueue = [];
+
+    return success;
+  } catch {
+    // C1 FIX: resolve(false) 而非 reject — 确保排队请求统一走登录重定向路径
+    refreshQueue.forEach((q) => q.resolve(false));
+    refreshQueue = [];
+    return false;
+  } finally {
+    clearTimeout(refreshTimeout);
+    isRefreshing = false;
+  }
 }
 
-export function setToken(token: string): void {
-  localStorage.setItem("token", token);
-}
+// =====================================================================
+// 核心请求函数
+// =====================================================================
 
-export function clearToken(): void {
-  localStorage.removeItem("token");
-}
-
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  _retried = false,
+): Promise<T> {
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
   };
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
+  // SEC-COOKIE: 不再注入 Authorization header — JWT 通过 httpOnly cookie 自动携带
   if (options.body && typeof options.body === "string") {
     headers["Content-Type"] = "application/json";
   }
@@ -45,12 +93,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
+    credentials: "include", // 确保 cookie 随请求发送
   });
 
-  if (res.status === 401) {
-    clearToken();
+  if (res.status === 401 && !_retried) {
+    // 首次 401 — 尝试 refresh token 续签
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      // refresh 成功 — 重放原始请求 (标记为 retried 防止无限循环)
+      return request<T>(path, options, true);
+    }
+
+    // refresh 失败 — 跳转登录页
     window.location.href = "/login";
-    throw new ApiError(401, "Unauthorized");
+    throw new ApiError(401, "Session expired, please login again");
   }
 
   if (!res.ok) {
@@ -88,7 +144,6 @@ export const api = {
 // =====================================================================
 
 export interface LoginResponse {
-  token: string;
   user: UserRecord;
   expires_in: number;
 }
@@ -111,6 +166,7 @@ export interface MeResponse {
 export const authApi = {
   login: (username: string, password: string) =>
     api.post<LoginResponse>("/auth/login", { username, password }),
+  logout: () => api.post<{ success: boolean }>("/auth/logout"),
   me: () => api.get<MeResponse>("/auth/me"),
   register: (username: string, password: string) =>
     api.post<{ user: UserRecord }>("/auth/register", { username, password }),

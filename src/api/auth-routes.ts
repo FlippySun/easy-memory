@@ -1,9 +1,11 @@
 /**
  * @module api/auth-routes
- * @description Auth API 路由 — 登录、注册、用户管理。
+ * @description Auth API 路由 — 登录、注册、用户管理、令牌刷新。
  *
  * 路由:
- * - POST /api/auth/login — 登录 (公开)
+ * - POST /api/auth/login — 登录 (公开)，设置 httpOnly cookie
+ * - POST /api/auth/logout — 登出 (需 JWT)，清除 cookie
+ * - POST /api/auth/refresh — 刷新 Access Token (需 Refresh Token cookie)
  * - POST /api/auth/register — 注册 (需 admin JWT 或 ADMIN_TOKEN)
  * - GET  /api/auth/me — 当前用户信息 (需 JWT)
  * - GET  /api/auth/users — 用户列表 (需 admin)
@@ -17,6 +19,8 @@
  * - I1: 所有 auth 操作审计记录
  * - I3: JWT 用户存在性 + is_active 校验
  * - I5: Admin 自我停用防护
+ * - SEC-COOKIE: JWT 迁移至 httpOnly cookie，防 XSS
+ * - SEC-REFRESH: Refresh Token 轮转 + 复用检测
  *
  * 铁律: 绝对禁止 console.log (MCP stdio 依赖)
  */
@@ -34,12 +38,11 @@ import {
   RegisterInputSchema,
   UpdateUserInputSchema,
   ROLE_PERMISSIONS,
+  COOKIE_ACCESS_TOKEN,
+  COOKIE_REFRESH_TOKEN,
 } from "../types/auth-schema.js";
 import type { JwtPayload, UserRole } from "../types/auth-schema.js";
-import type {
-  AuditOperation,
-  AuditOutcome,
-} from "../types/audit-schema.js";
+import type { AuditOperation, AuditOutcome } from "../types/audit-schema.js";
 
 // =========================================================================
 // Types
@@ -60,6 +63,8 @@ interface AuthRoutesConfig {
   analytics?: AnalyticsService;
   /** Whether to trust X-Forwarded-For header */
   trustProxy?: boolean;
+  /** Whether to set Secure flag on cookies (production + TLS) */
+  secureCookies?: boolean;
 }
 
 // =========================================================================
@@ -128,16 +133,75 @@ function isLoginRateLimited(clientIp: string): boolean {
 }
 
 // =========================================================================
+// Cookie Helper
+// =========================================================================
+
+/**
+ * 从请求中解析指定 cookie 值。
+ * 简单实现 — 无需外部库。
+ */
+function parseCookie(c: Context, name: string): string | undefined {
+  const header = c.req.header("Cookie");
+  if (!header) return undefined;
+
+  for (const pair of header.split(";")) {
+    const [key, ...rest] = pair.trim().split("=");
+    if (key === name) return rest.join("="); // value 中可能包含 =
+  }
+  return undefined;
+}
+
+/**
+ * 构建 Set-Cookie header 字符串。
+ */
+function buildSetCookie(
+  name: string,
+  value: string,
+  maxAge: number,
+  opts: { secure: boolean; path?: string; sameSite?: "Lax" | "Strict" },
+): string {
+  const parts = [
+    `${name}=${value}`,
+    "HttpOnly",
+    `Path=${opts.path ?? "/"}`,
+    `Max-Age=${maxAge}`,
+    `SameSite=${opts.sameSite ?? "Lax"}`,
+  ];
+  if (opts.secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+/**
+ * 构建清除 cookie 的 Set-Cookie header。
+ */
+function buildClearCookie(
+  name: string,
+  opts: { secure: boolean; path?: string },
+): string {
+  const parts = [
+    `${name}=`,
+    "HttpOnly",
+    `Path=${opts.path ?? "/"}`,
+    "Max-Age=0",
+    "SameSite=Lax",
+  ];
+  if (opts.secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+// =========================================================================
 // JWT Auth Middleware (for auth routes)
 // =========================================================================
 
 /**
- * JWT 认证中间件 — 从 Authorization header 提取并验证 JWT。
+ * JWT 认证中间件 — 从 Cookie 或 Authorization header 提取并验证 JWT。
+ * 优先读取 httpOnly cookie，回退到 Authorization header (API 客户端兼容)。
  * 同时支持 ADMIN_TOKEN (向后兼容，timing-safe 比较)。
  *
  * 安全修复:
  * - C1: ADMIN_TOKEN 使用 timing-safe 比较 (非 ===)
  * - I3: 验证 JWT 对应的用户仍然存在且活跃
+ * - SEC-COOKIE: 优先从 httpOnly cookie 读取 JWT
  */
 function jwtAuth(authService: AuthService, adminToken: string) {
   return async (c: Context, next: Next) => {
@@ -145,26 +209,34 @@ function jwtAuth(authService: AuthService, adminToken: string) {
     // 空 ADMIN_TOKEN 会导致可预测的 JWT 密钥 → 可伪造 token
     if (!adminToken) {
       return c.json(
-        { error: "Authentication service not configured (ADMIN_TOKEN required)" },
+        {
+          error: "Authentication service not configured (ADMIN_TOKEN required)",
+        },
         503,
       );
     }
 
-    const authorization = c.req.header("Authorization");
-    if (!authorization) {
-      return c.json({ error: "Missing Authorization header" }, 401);
-    }
+    // Step 1: 尝试从 httpOnly Cookie 读取 JWT (Web UI 路径)
+    let token = parseCookie(c, COOKIE_ACCESS_TOKEN);
 
-    const spaceIdx = authorization.indexOf(" ");
-    if (spaceIdx === -1) {
-      return c.json({ error: "Invalid authorization format" }, 401);
-    }
+    // Step 2: 回退到 Authorization header (API 客户端路径)
+    if (!token) {
+      const authorization = c.req.header("Authorization");
+      if (!authorization) {
+        return c.json({ error: "Missing authentication credentials" }, 401);
+      }
 
-    const scheme = authorization.slice(0, spaceIdx);
-    const token = authorization.slice(spaceIdx + 1).trim();
+      const spaceIdx = authorization.indexOf(" ");
+      if (spaceIdx === -1) {
+        return c.json({ error: "Invalid authorization format" }, 401);
+      }
 
-    if (scheme.toLowerCase() !== "bearer" || !token) {
-      return c.json({ error: "Invalid authorization format" }, 401);
+      const scheme = authorization.slice(0, spaceIdx);
+      token = authorization.slice(spaceIdx + 1).trim();
+
+      if (scheme.toLowerCase() !== "bearer" || !token) {
+        return c.json({ error: "Invalid authorization format" }, 401);
+      }
     }
 
     // 尝试 JWT 验证
@@ -175,7 +247,10 @@ function jwtAuth(authService: AuthService, adminToken: string) {
       if (payload.sub !== 0) {
         const user = authService.getUserById(payload.sub);
         if (!user || !user.is_active) {
-          return c.json({ error: "User account has been deactivated or deleted" }, 401);
+          return c.json(
+            { error: "User account has been deactivated or deleted" },
+            401,
+          );
         }
       }
       c.set("jwtPayload", payload);
@@ -218,13 +293,21 @@ function requireAdmin() {
 // =========================================================================
 
 export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
-  const { authService, adminToken, audit, analytics, trustProxy } = config;
+  const {
+    authService,
+    adminToken,
+    audit,
+    analytics,
+    trustProxy,
+    secureCookies,
+  } = config;
+  const secure = secureCookies ?? false;
   const app = new Hono<Env>();
 
   // ---- 内部: 审计记录辅助 ----
   function recordAuthAudit(
     c: Context,
-    operation: AuditOperation | string,
+    operation: AuditOperation,
     outcome: AuditOutcome,
     start: number,
     detail: string = "",
@@ -232,14 +315,21 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
     if (!audit) return;
     try {
       const entry = audit.buildEntry({
-        operation: operation as AuditOperation,
+        operation,
         project: "_auth",
         outcome,
         outcomeDetail: detail,
         elapsedMs: Date.now() - start,
         httpMethod: c.req.method,
         httpPath: c.req.path,
-        httpStatus: outcome === "success" ? 200 : outcome === "unauthorized" ? 401 : outcome === "rejected" ? 400 : 500,
+        httpStatus:
+          outcome === "success"
+            ? 200
+            : outcome === "unauthorized"
+              ? 401
+              : outcome === "rejected"
+                ? 400
+                : 500,
         clientIp: getClientIp(c, trustProxy),
         userAgent: c.req.header("User-Agent") ?? "",
         keyPrefix: "auth",
@@ -258,8 +348,17 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
 
     // C3 FIX: 登录限流 — 10 次/分钟/IP
     if (isLoginRateLimited(clientIp)) {
-      recordAuthAudit(c, "auth_login_failed", "rate_limited", start, "Login rate limited");
-      return c.json({ error: "Too many login attempts. Please try again later." }, 429);
+      recordAuthAudit(
+        c,
+        "auth_login_failed",
+        "rate_limited",
+        start,
+        "Login rate limited",
+      );
+      return c.json(
+        { error: "Too many login attempts. Please try again later." },
+        429,
+      );
     }
 
     const body = await c.req.json();
@@ -276,15 +375,157 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
       parsed.data.password,
     );
     if (!result) {
-      recordAuthAudit(c, "auth_login_failed", "unauthorized", start, "Invalid credentials");
-      log.info("Failed login attempt", { username: parsed.data.username, ip: clientIp });
+      recordAuthAudit(
+        c,
+        "auth_login_failed",
+        "unauthorized",
+        start,
+        "Invalid credentials",
+      );
+      log.info("Failed login attempt", {
+        username: parsed.data.username,
+        ip: clientIp,
+      });
       // 故意模糊错误信息，防止用户名枚举
       return c.json({ error: "Invalid username or password" }, 401);
     }
 
+    // SEC-COOKIE: 设置 httpOnly cookies (access + refresh)
+    c.header(
+      "Set-Cookie",
+      buildSetCookie(
+        COOKIE_ACCESS_TOKEN,
+        result.accessToken,
+        result.accessExpiresIn,
+        {
+          secure,
+          path: "/",
+          sameSite: "Lax",
+        },
+      ),
+    );
+    c.header(
+      "Set-Cookie",
+      buildSetCookie(
+        COOKIE_REFRESH_TOKEN,
+        result.refreshToken,
+        result.refreshExpiresIn,
+        {
+          secure,
+          path: "/api/auth",
+          sameSite: "Strict",
+        },
+      ),
+      { append: true },
+    );
+
     recordAuthAudit(c, "auth_login", "success", start);
     log.info("User logged in", { username: parsed.data.username });
-    return c.json(result);
+
+    // 响应体不再包含 token — 通过 httpOnly cookie 传递
+    return c.json({
+      user: result.user,
+      expires_in: result.accessExpiresIn,
+    });
+  });
+
+  // ===== POST /logout — 清除 cookies =====
+  app.post("/logout", jwtAuth(authService, adminToken), async (c) => {
+    const start = Date.now();
+    const payload = c.get("jwtPayload") as JwtPayload;
+
+    // 撤销该用户关联的 refresh token (如有)
+    const refreshTokenRaw = parseCookie(c, COOKIE_REFRESH_TOKEN);
+    if (refreshTokenRaw) {
+      // 通过撤销来确保 refresh token 不可复用
+      // 注: 简单实现 — 直接撤销用户所有 refresh tokens
+      if (payload.sub !== 0) {
+        authService.revokeAllUserRefreshTokens(payload.sub);
+      }
+    }
+
+    // 清除 cookies
+    c.header(
+      "Set-Cookie",
+      buildClearCookie(COOKIE_ACCESS_TOKEN, { secure, path: "/" }),
+    );
+    c.header(
+      "Set-Cookie",
+      buildClearCookie(COOKIE_REFRESH_TOKEN, { secure, path: "/api/auth" }),
+      { append: true },
+    );
+
+    recordAuthAudit(c, "auth_logout", "success", start);
+    log.info("User logged out", { username: payload.username });
+    return c.json({ success: true });
+  });
+
+  // ===== POST /refresh — 刷新 Access Token (Refresh Token 轮转) =====
+  app.post("/refresh", async (c) => {
+    const start = Date.now();
+
+    const refreshTokenRaw = parseCookie(c, COOKIE_REFRESH_TOKEN);
+    if (!refreshTokenRaw) {
+      return c.json({ error: "Missing refresh token" }, 401);
+    }
+
+    const result = authService.rotateRefreshToken(refreshTokenRaw);
+    if (!result) {
+      // 令牌无效/过期/被复用攻击 — 清除所有 cookies 强制重新登录
+      c.header(
+        "Set-Cookie",
+        buildClearCookie(COOKIE_ACCESS_TOKEN, { secure, path: "/" }),
+      );
+      c.header(
+        "Set-Cookie",
+        buildClearCookie(COOKIE_REFRESH_TOKEN, { secure, path: "/api/auth" }),
+        { append: true },
+      );
+
+      recordAuthAudit(
+        c,
+        "auth_refresh_failed",
+        "unauthorized",
+        start,
+        "Invalid refresh token",
+      );
+      return c.json({ error: "Invalid or expired refresh token" }, 401);
+    }
+
+    // 设置新的 cookies (令牌轮转)
+    c.header(
+      "Set-Cookie",
+      buildSetCookie(
+        COOKIE_ACCESS_TOKEN,
+        result.accessToken,
+        result.accessExpiresIn,
+        {
+          secure,
+          path: "/",
+          sameSite: "Lax",
+        },
+      ),
+    );
+    c.header(
+      "Set-Cookie",
+      buildSetCookie(
+        COOKIE_REFRESH_TOKEN,
+        result.refreshToken,
+        result.refreshExpiresIn,
+        {
+          secure,
+          path: "/api/auth",
+          sameSite: "Strict",
+        },
+      ),
+      { append: true },
+    );
+
+    recordAuthAudit(c, "auth_refresh", "success", start);
+    return c.json({
+      user: result.user,
+      expires_in: result.accessExpiresIn,
+    });
   });
 
   // ===== GET /me — 需要 JWT =====
@@ -343,7 +584,13 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
       }
 
       const createdBy = (c.get("jwtPayload") as JwtPayload).username;
-      recordAuthAudit(c, "auth_register", "success", start, `Created user: ${parsed.data.username}`);
+      recordAuthAudit(
+        c,
+        "auth_register",
+        "success",
+        start,
+        `Created user: ${parsed.data.username}`,
+      );
       log.info("User registered", {
         username: parsed.data.username,
         createdBy,
@@ -388,7 +635,10 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
 
       // C4 FIX: 禁止自我降级 (后端强制，不依赖前端)
       if (payload.sub === id) {
-        if (parsed.data.role !== undefined && parsed.data.role !== payload.role) {
+        if (
+          parsed.data.role !== undefined &&
+          parsed.data.role !== payload.role
+        ) {
           return c.json({ error: "Cannot change your own role" }, 400);
         }
         // I5 FIX: 禁止自我停用
@@ -421,7 +671,13 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
         return c.json({ error: "User not found" }, 404);
       }
 
-      recordAuthAudit(c, "auth_user_update", "success", start, `Updated user ${id}: ${Object.keys(parsed.data).join(", ")}`);
+      recordAuthAudit(
+        c,
+        "auth_user_update",
+        "success",
+        start,
+        `Updated user ${id}: ${Object.keys(parsed.data).join(", ")}`,
+      );
       log.info("User updated", {
         userId: id,
         updatedBy: payload.username,
@@ -457,7 +713,13 @@ export function createAuthRoutes(config: AuthRoutesConfig): Hono<Env> {
         );
       }
 
-      recordAuthAudit(c, "auth_user_delete", "success", start, `Deleted user ${id}`);
+      recordAuthAudit(
+        c,
+        "auth_user_delete",
+        "success",
+        start,
+        `Deleted user ${id}`,
+      );
       log.info("User deleted", {
         userId: id,
         deletedBy: payload.username,

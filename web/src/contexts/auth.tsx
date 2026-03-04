@@ -6,7 +6,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { authApi, setToken, clearToken, type UserRecord } from "../api/client";
+import { authApi, type UserRecord } from "../api/client";
 
 interface AuthState {
   user: UserRecord | null;
@@ -34,21 +34,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     try {
-      const token = localStorage.getItem("token");
-      if (!token) {
-        setState({
-          user: null,
-          permissions: [],
-          isLoading: false,
-          isAuthenticated: false,
-        });
-        return;
-      }
-
+      // SEC-COOKIE: 不再检查 localStorage — cookie 由浏览器自动携带
       const { user, permissions } = await authApi.me();
       setState({ user, permissions, isLoading: false, isAuthenticated: true });
     } catch {
-      clearToken();
       setState({
         user: null,
         permissions: [],
@@ -64,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await authApi.login(username, password);
-    setToken(res.token);
+    // SEC-COOKIE: 不再调用 setToken — httpOnly cookie 由服务端 Set-Cookie 写入
 
     // 先获取完整权限再更新状态，避免两阶段更新导致的权限闪烁
     let permissions: string[] = [];
@@ -83,14 +72,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const logout = useCallback(() => {
-    clearToken();
+  const logout = useCallback(async () => {
+    // W3 FIX: 立即清除前端状态 — 防止 await 期间的幽灵请求
     setState({
       user: null,
       permissions: [],
       isLoading: false,
       isAuthenticated: false,
     });
+    try {
+      // SEC-COOKIE: 调用后端 logout 端点清除 httpOnly cookies + 撤销 refresh tokens
+      await authApi.logout();
+    } catch {
+      // 后端清理失败不影响前端状态（cookies 可能已过期）
+    }
   }, []);
 
   const hasPermission = useCallback(

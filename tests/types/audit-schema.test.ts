@@ -267,6 +267,14 @@ describe("Constants", () => {
     expect(AUDIT_OPERATION).toContain("memory_search");
     expect(AUDIT_OPERATION).toContain("memory_forget");
     expect(AUDIT_OPERATION).toContain("memory_status");
+    expect(AUDIT_OPERATION).toContain("auth_login");
+    expect(AUDIT_OPERATION).toContain("auth_login_failed");
+    expect(AUDIT_OPERATION).toContain("auth_logout");
+    expect(AUDIT_OPERATION).toContain("auth_refresh");
+    expect(AUDIT_OPERATION).toContain("auth_refresh_failed");
+    expect(AUDIT_OPERATION).toContain("auth_register");
+    expect(AUDIT_OPERATION).toContain("auth_user_update");
+    expect(AUDIT_OPERATION).toContain("auth_user_delete");
   });
 
   it("should have all outcome types", () => {

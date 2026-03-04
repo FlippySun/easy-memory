@@ -115,6 +115,8 @@ function createApp(container: AppContainer): Hono<Env> {
       await next();
       return;
     }
+    // Auth 路由也受 ban 检查 — 被 ban 的 IP 完全禁止登录/刷新/注册
+    // 登录接口另有独立限流 (10次/分钟/IP) 防滥用
 
     const clientIp = getClientIp(c, config.trustProxy);
     const ipCheck = container.banManager.isIpBanned(clientIp);
@@ -140,6 +142,7 @@ function createApp(container: AppContainer): Hono<Env> {
     audit: container.audit,
     analytics: container.analytics,
     trustProxy: config.trustProxy,
+    secureCookies: config.requireTls,
   });
   app.route("/api/auth", authRoutes);
 
@@ -179,7 +182,14 @@ function createApp(container: AppContainer): Hono<Env> {
   });
 
   // Content-Type 校验: POST 请求必须携带 application/json
-  app.use("/api/*", validateJsonContentType);
+  // B1 FIX: Auth 路由的 logout/refresh 是无 body 的 POST — 跳过 Content-Type 检查
+  app.use("/api/*", async (c, next) => {
+    if (c.req.path.startsWith("/api/auth")) {
+      await next();
+      return;
+    }
+    return validateJsonContentType(c, next);
+  });
 
   // 限流: 全局限流仅对 Master Token 生效 (Managed Key 在 bearerAuth 内已做 per-key 限流)
   app.use("/api/*", async (c, next) => {
@@ -519,10 +529,29 @@ export async function startHttpShell(container: AppContainer): Promise<void> {
     (server as { headersTimeout: number }).headersTimeout = 3000;
   }
 
+  // 定期清理过期 refresh tokens — 每 6 小时执行 (防止表无限膨胀)
+  const CLEANUP_INTERVAL_MS = 6 * 3600 * 1000; // 6 hours
+  const cleanupTimer = setInterval(() => {
+    try {
+      const deleted = container.auth.cleanupExpiredRefreshTokens();
+      if (deleted > 0) {
+        log.info("Cleaned up expired refresh tokens", { deleted });
+      }
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      log.error("Failed to cleanup expired refresh tokens", {
+        error: error.message,
+      });
+    }
+  }, CLEANUP_INTERVAL_MS);
+  // 防止 timer 阻止进程退出
+  cleanupTimer.unref();
+
   // 优雅关闭 — HTTP 模式: 不监听 stdin，先关 HTTP 再关服务
   setupGracefulShutdown(
     async () => {
       log.info("Shutting down HTTP server");
+      clearInterval(cleanupTimer);
       // P8-FIX: 每个 close() 独立 try-catch，确保单个失败不阻塞后续服务关闭
       const shutdownErrors: Array<{ service: string; error: Error }> = [];
 

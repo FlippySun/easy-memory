@@ -206,10 +206,11 @@ describe("AuthService", () => {
     it("should login with correct credentials", () => {
       const result = service.login("admin", "admin-pass-123");
       expect(result).not.toBeNull();
-      expect(result!.token).toBeTruthy();
+      expect(result!.accessToken).toBeTruthy();
+      expect(result!.refreshToken).toBeTruthy();
       expect(result!.user.username).toBe("admin");
       expect(result!.user.role).toBe("admin");
-      expect(result!.expires_in).toBe(7200);
+      expect(result!.accessExpiresIn).toBe(900);
     });
 
     it("should reject wrong password", () => {
@@ -241,7 +242,7 @@ describe("AuthService", () => {
       const result = service.login("admin", "admin-pass-123");
       expect(result).not.toBeNull();
 
-      const payload = service.verifyToken(result!.token);
+      const payload = service.verifyToken(result!.accessToken);
       expect(payload).not.toBeNull();
       expect(payload!.username).toBe("admin");
       expect(payload!.role).toBe("admin");
@@ -294,7 +295,9 @@ describe("AuthService", () => {
       const updated = service.updateUser(newUser!.id, { role: "admin" });
       expect(updated).not.toBeNull();
       expect(updated).not.toBe("last_admin");
-      expect((updated as Exclude<typeof updated, null | "last_admin">).role).toBe("admin");
+      expect(
+        (updated as Exclude<typeof updated, null | "last_admin">).role,
+      ).toBe("admin");
     });
 
     it("should update user password", () => {
@@ -389,7 +392,7 @@ describe("AuthService", () => {
   describe("Token Verification", () => {
     it("should verify valid JWT tokens", () => {
       const loginResult = service.login("admin", "admin-pass-123");
-      const payload = service.verifyToken(loginResult!.token);
+      const payload = service.verifyToken(loginResult!.accessToken);
       expect(payload).not.toBeNull();
       expect(payload!.sub).toBeGreaterThan(0);
     });

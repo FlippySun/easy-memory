@@ -6,6 +6,7 @@
  * - ADMIN_TOKEN 环境变量: 独立于 HTTP_AUTH_TOKEN (原有行为)
  * - JWT admin token: Web UI 用户登录后获取的 JWT (admin 角色)
  * - Admin 路由同时支持两种认证方式
+ * - SEC-COOKIE: 优先从 httpOnly cookie 读取 JWT
  *
  * 安全考量:
  * - Timing-safe 比较防止侧信道攻击
@@ -21,6 +22,21 @@ import { timingSafeEqual } from "node:crypto";
 import { log } from "../utils/logger.js";
 import { getClientIp as getClientIpShared } from "../utils/ip.js";
 import type { AuthService } from "../services/auth.js";
+import { COOKIE_ACCESS_TOKEN } from "../types/auth-schema.js";
+
+/**
+ * 从请求中解析指定 cookie 值。
+ */
+function parseCookie(c: Context, name: string): string | undefined {
+  const header = c.req.header("Cookie");
+  if (!header) return undefined;
+
+  for (const pair of header.split(";")) {
+    const [key, ...rest] = pair.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return undefined;
+}
 
 /**
  * Timing-safe 字符串比较。
@@ -44,7 +60,7 @@ function safeCompare(a: string, b: string): boolean {
  *
  * 行为:
  * - adminToken 为空 → 403 Forbidden (admin 功能禁用)
- * - 无 Authorization 头 → 401
+ * - SEC-COOKIE: 优先从 httpOnly cookie 读取 JWT
  * - Token 匹配 ADMIN_TOKEN → 放行
  * - Token 为有效 JWT 且角色为 admin → 放行
  * - 其他 → 401
@@ -63,38 +79,57 @@ export function adminAuth(adminToken: string, authService?: AuthService) {
       );
     }
 
+    // SEC-COOKIE: 优先从 httpOnly Cookie 读取 JWT
+    const cookieToken = parseCookie(c, COOKIE_ACCESS_TOKEN);
+
+    // 回退: 从 Authorization header 读取
+    let headerToken: string | undefined;
     const authorization = c.req.header("Authorization");
-    if (!authorization) {
-      return c.json({ error: "Missing Authorization header" }, 401);
+    if (authorization) {
+      const spaceIdx = authorization.indexOf(" ");
+      if (spaceIdx !== -1) {
+        const scheme = authorization.slice(0, spaceIdx);
+        const t = authorization.slice(spaceIdx + 1).trim();
+        if (scheme.toLowerCase() === "bearer" && t) {
+          headerToken = t;
+        }
+      }
     }
 
-    const spaceIdx = authorization.indexOf(" ");
-    if (spaceIdx === -1) {
-      return c.json({ error: "Invalid authorization format" }, 401);
+    // 如果两者都不存在
+    if (!cookieToken && !headerToken) {
+      return c.json({ error: "Missing authentication credentials" }, 401);
     }
 
-    const scheme = authorization.slice(0, spaceIdx);
-    const token = authorization.slice(spaceIdx + 1).trim();
-
-    if (scheme.toLowerCase() !== "bearer" || !token) {
-      return c.json({ error: "Invalid authorization format" }, 401);
-    }
-
-    // Path 1: ADMIN_TOKEN — timing-safe 比较
-    if (safeCompare(token, adminToken)) {
-      await next();
-      return;
-    }
-
-    // Path 2: JWT — 验证签名 + 过期 + admin 角色 (C2 FIX)
-    if (authService) {
-      const payload = authService.verifyToken(token);
+    // 尝试认证 — Cookie 路径 (JWT only, ADMIN_TOKEN 不通过 cookie 传递)
+    if (cookieToken && authService) {
+      const payload = authService.verifyToken(cookieToken);
       if (payload && payload.role === "admin") {
-        // 验证用户仍存在且活跃 (防止已删除/停用用户的 JWT 继续使用)
         const user = authService.getUserById(payload.sub);
         if (user && user.is_active) {
           await next();
           return;
+        }
+      }
+    }
+
+    // 尝试认证 — Authorization header 路径
+    if (headerToken) {
+      // Path 1: ADMIN_TOKEN — timing-safe 比较
+      if (safeCompare(headerToken, adminToken)) {
+        await next();
+        return;
+      }
+
+      // Path 2: JWT — 验证签名 + 过期 + admin 角色 (C2 FIX)
+      if (authService) {
+        const payload = authService.verifyToken(headerToken);
+        if (payload && payload.role === "admin") {
+          const user = authService.getUserById(payload.sub);
+          if (user && user.is_active) {
+            await next();
+            return;
+          }
         }
       }
     }

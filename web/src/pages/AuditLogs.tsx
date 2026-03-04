@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { adminApi, ApiError } from "../api/client";
 import { Card, Table, Badge, EmptyState } from "../components/ui";
-import { ScrollText, Filter, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
+import {
+  ScrollText,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  AlertCircle,
+} from "lucide-react";
 
 interface AuditLog {
   id: number;
@@ -51,7 +57,9 @@ export function AuditLogsPage() {
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(err instanceof ApiError ? err.message : "Failed to load audit logs");
+        setError(
+          err instanceof ApiError ? err.message : "Failed to load audit logs",
+        );
       }
     } finally {
       if (!controller.signal.aborted) {
@@ -62,7 +70,9 @@ export function AuditLogsPage() {
 
   useEffect(() => {
     fetchLogs();
-    return () => { abortRef.current?.abort(); };
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [fetchLogs]);
 
   const totalPages = Math.ceil(total / pageSize);

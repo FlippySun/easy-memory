@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-07-07
+
+### Added
+
+- **[Security] JWT httpOnly Cookie 迁移**: 彻底消除 XSS 令牌窃取风险
+  - JWT 从 `localStorage` 迁移到 `httpOnly` cookie (`em_access`)
+  - Cookie 配置: `HttpOnly`, `Secure` (TLS 环境), `SameSite=Lax`, `Path=/`
+  - 前端移除所有 `localStorage` 令牌操作，改用 `credentials: 'include'`
+  - 后端认证中间件 (jwtAuth + adminAuth) 优先从 Cookie 读取，回退到 `Authorization` header (API 客户端向后兼容)
+
+- **[Security] Refresh Token 机制**: Access Token 短生命周期 + 自动续签
+  - Access Token 有效期从 2 小时缩短至 **15 分钟** (减小令牌暴露窗口)
+  - Refresh Token: 7 天有效期，独立 `httpOnly` cookie (`em_refresh`, `SameSite=Strict`, `Path=/api/auth`)
+  - SQLite `refresh_tokens` 表: 支持令牌轮转、家族追踪、复用检测
+  - **令牌轮转** (Token Rotation): 每次 refresh 签发全新 access + refresh token 对，旧令牌即时撤销
+  - **复用检测** (Reuse Detection): 已撤销令牌被复用 → 检测为盗用攻击 → 撤销整个令牌家族
+  - **多标签页宽限期**: 60 秒内的并发 refresh 请求视为合法多标签页场景 (避免误判)
+  - 新增 `POST /api/auth/refresh` — 令牌轮转端点
+  - 新增 `POST /api/auth/logout` — 清除 cookies + 撤销所有用户 refresh tokens
+  - 前端 401 自动 refresh: 锁机制防止并发 refresh 竞态，成功后重放原始请求
+
+- **[Security] 级联安全守卫**:
+  - 用户密码变更 → 自动撤销该用户所有 refresh tokens (强制重新登录)
+  - 用户停用 (is_active=false) → 自动撤销所有 refresh tokens
+  - 用户删除 → 级联删除所有 refresh tokens
+  - `cleanupExpiredRefreshTokens()` 方法: 定期清理过期/已撤销令牌 (DB 卫生)
+
+- **[Security] 被 Ban IP 登录策略**: 防止 Admin 自锁
+  - `/api/auth/*` 路由免疫 IP Ban (与 `/api/admin/*` 一致)
+  - Admin 被 ban 后仍可登录 → 通过 Admin Panel 解除 ban
+  - 非 Admin 用户登录后记忆 API 仍被 ban 阻断 (不降低安全性)
+  - 登录接口有独立限流 (10 次/分钟/IP) 防止滥用
+
+### Changed
+
+- **Access Token 有效期**: 7200s (2h) → 900s (15min)
+- **Login API 响应**: 不再在 response body 返回 JWT token (通过 httpOnly cookie 传递)
+- **jwtAuth 中间件**: 优先读取 `em_access` cookie，回退 `Authorization` header
+- **adminAuth 中间件**: 同上，Cookie 路径仅支持 JWT (ADMIN_TOKEN 仍通过 header)
+- **前端 AuthContext**: 移除 `localStorage` 依赖，`logout()` 调用后端端点清除 httpOnly cookies
+- **前端 API Client**: `credentials: 'include'` + 自动 refresh + 并发 refresh 锁
+
+### Tests
+
+- 更新 `tests/services/auth.test.ts`: 适配新的 `login()` 返回结构
+- 总计: **32 文件, 845 测试用例全部通过**
+
+### Fixed (深度交叉审查)
+
+- **[Critical] 前端 tryRefresh() 异常冒泡**: `catch` 分支将排队请求直接 `reject(err)`，导致并发 401 请求的 Unhandled Promise Rejection 绕过登录重定向 → 改为 `resolve(false)` 统一走重定向路径
+- **[Critical] 前端 tryRefresh() 无超时保护**: 网关/中间人挂起 `/refresh` 请求时全局 API 永久死锁 → 引入 `AbortController` + 10 秒超时
+- **[Critical] 后端 rotateRefreshToken() 非原子操作**: `INSERT` 新令牌 + `UPDATE` 旧令牌撤销之间存在幻读风险（崩溃可产生孤儿令牌）→ 包裹 `db.transaction()`
+- **[Breaking] validateJsonContentType 中间件 415 拦截**: `POST /api/auth/logout` 和 `/refresh` 无 request body → `Content-Type` 校验拒绝请求 → Auth 路由豁免 Content-Type 检查
+- **[Warning] logout() 异步状态延迟**: `await authApi.logout()` 期间前端仍持有已认证状态 → 幽灵请求 → 改为立即清除前端状态再执行后端清理
+
 ## [0.4.0] - 2025-07-06
 
 ### Added

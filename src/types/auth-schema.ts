@@ -137,13 +137,43 @@ export interface JwtPayload {
 }
 
 // =========================================================================
+// Refresh Token
+// =========================================================================
+
+/** Refresh Token 数据库行 */
+export interface RefreshTokenRecord {
+  id: string; // UUID
+  user_id: number;
+  token_hash: string; // SHA-256 hash of raw token
+  family_id: string; // Token family UUID (rotation tracking)
+  expires_at: string; // ISO datetime
+  created_at: string; // ISO datetime
+  revoked_at: string | null; // ISO datetime (null = active)
+  replaced_by: string | null; // ID of replacement token (rotation)
+}
+
+// =========================================================================
+// Cookie & Token Expiry Constants
+// =========================================================================
+
+/** Access token cookie 名称 */
+export const COOKIE_ACCESS_TOKEN = "em_access";
+/** Refresh token cookie 名称 */
+export const COOKIE_REFRESH_TOKEN = "em_refresh";
+/** Access token 有效期 (秒) — 15 分钟 */
+export const ACCESS_TOKEN_EXPIRY_SECONDS = 900;
+/** Refresh token 有效期 (秒) — 7 天 */
+export const REFRESH_TOKEN_EXPIRY_SECONDS = 604_800;
+/** Refresh token 轮转宽限期 (秒) — 并发多标签页场景 */
+export const REFRESH_TOKEN_REUSE_GRACE_SECONDS = 60;
+
+// =========================================================================
 // Auth API Response Types
 // =========================================================================
 
 export interface LoginResponse {
-  token: string;
   user: SafeUserRecord;
-  expires_in: number; // seconds
+  expires_in: number; // seconds (access token)
 }
 
 export interface AuthMeResponse {

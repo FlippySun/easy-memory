@@ -1,9 +1,13 @@
 {
   "folders": [
-	{
-		"name": "easy-memory",
-		"path": "."
-	}
-],
-  "settings": {}
+    {
+      "name": "easy-memory",
+      "path": ".",
+    },
+  ],
+  "settings": {
+    "chat.tools.terminal.autoApprove": {
+      "npx vitest": true,
+    },
+  },
 }

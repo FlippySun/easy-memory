@@ -52,7 +52,11 @@ export function AnalyticsPage() {
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(err instanceof ApiError ? err.message : "Failed to load analytics data");
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : "Failed to load analytics data",
+        );
       }
     } finally {
       if (!controller.signal.aborted) {
@@ -63,7 +67,9 @@ export function AnalyticsPage() {
 
   useEffect(() => {
     fetchData();
-    return () => { abortRef.current?.abort(); };
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [fetchData]);
 
   const period = (data.overview?.period as Record<string, unknown>) ?? {};

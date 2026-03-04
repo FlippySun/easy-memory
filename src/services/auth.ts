@@ -16,7 +16,9 @@ import {
   randomBytes,
   scryptSync,
   createHmac,
+  createHash,
   timingSafeEqual,
+  randomUUID,
 } from "node:crypto";
 import type Database from "better-sqlite3";
 import { log } from "../utils/logger.js";
@@ -24,8 +26,14 @@ import type {
   UserRole,
   SafeUserRecord,
   JwtPayload,
+  RefreshTokenRecord,
 } from "../types/auth-schema.js";
-import { ROLE_PERMISSIONS } from "../types/auth-schema.js";
+import {
+  ROLE_PERMISSIONS,
+  ACCESS_TOKEN_EXPIRY_SECONDS,
+  REFRESH_TOKEN_EXPIRY_SECONDS,
+  REFRESH_TOKEN_REUSE_GRACE_SECONDS,
+} from "../types/auth-schema.js";
 
 // =========================================================================
 // Constants
@@ -37,7 +45,11 @@ const SCRYPT_BLOCK_SIZE = 8; // r
 const SCRYPT_PARALLELIZATION = 1; // p
 const SALT_LEN = 32;
 
-const JWT_EXPIRY_SECONDS = 7200; // 2 hours
+/**
+ * 默认 Access Token 过期时间 — 使用 auth-schema 中的常量。
+ * 旧值 7200 (2h) 已迁移为 900 (15min) + Refresh Token 机制。
+ */
+const JWT_EXPIRY_SECONDS = ACCESS_TOKEN_EXPIRY_SECONDS;
 const JWT_ALGORITHM = "HS256";
 
 // =========================================================================
@@ -231,6 +243,25 @@ export class AuthService {
       CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
       CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
     `);
+
+    // Refresh Token 表 — 支持 token 轮转与复用检测
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        family_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        revoked_at TEXT,
+        replaced_by TEXT,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family_id ON refresh_tokens(family_id);
+    `);
   }
 
   /**
@@ -273,7 +304,9 @@ export class AuthService {
       // UNIQUE 约束冲突 — 可能是并发初始化或外部先行创建
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("UNIQUE constraint")) {
-        log.info("AuthService: Admin user already exists (concurrent seed), skipping");
+        log.info(
+          "AuthService: Admin user already exists (concurrent seed), skipping",
+        );
       } else {
         log.error("AuthService: Failed to seed admin user", { error: msg });
         throw err;
@@ -286,12 +319,18 @@ export class AuthService {
   // =====================================================================
 
   /**
-   * 用户登录 — 验证凭证，返回 JWT token。
+   * 用户登录 — 验证凭证，返回 JWT access token + refresh token。
    */
   login(
     username: string,
     password: string,
-  ): { token: string; user: SafeUserRecord; expires_in: number } | null {
+  ): {
+    accessToken: string;
+    refreshToken: string;
+    user: SafeUserRecord;
+    accessExpiresIn: number;
+    refreshExpiresIn: number;
+  } | null {
     if (!this.db) return null;
 
     const row = this.db
@@ -306,16 +345,21 @@ export class AuthService {
       .prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?")
       .run(row.id);
 
-    const token = signJwt(
+    const accessToken = signJwt(
       { sub: row.id, role: row.role as UserRole, username: row.username },
       this.jwtSecret,
       this.jwtExpirySeconds,
     );
 
+    // 创建 Refresh Token
+    const refreshResult = this.createRefreshToken(row.id);
+
     return {
-      token,
+      accessToken,
+      refreshToken: refreshResult.rawToken,
       user: toSafeUser(row),
-      expires_in: this.jwtExpirySeconds,
+      accessExpiresIn: this.jwtExpirySeconds,
+      refreshExpiresIn: REFRESH_TOKEN_EXPIRY_SECONDS,
     };
   }
 
@@ -403,7 +447,7 @@ export class AuthService {
     if (target.role === "admin") {
       const wouldLoseAdmin =
         (updates.role !== undefined && updates.role !== "admin") ||
-        (updates.is_active === false);
+        updates.is_active === false;
 
       if (wouldLoseAdmin) {
         const adminCount = this.db
@@ -442,6 +486,11 @@ export class AuthService {
       .prepare(`UPDATE users SET ${setClauses.join(", ")} WHERE id = ?`)
       .run(...params);
 
+    // 安全守卫: 密码变更或停用时撤销所有 refresh tokens (强制重新登录)
+    if (updates.password !== undefined || updates.is_active === false) {
+      this.revokeAllUserRefreshTokens(id);
+    }
+
     return this.getUserById(id);
   }
 
@@ -472,8 +521,231 @@ export class AuthService {
       }
     }
 
+    // 级联删除用户的所有 refresh tokens
+    this.db.prepare("DELETE FROM refresh_tokens WHERE user_id = ?").run(id);
+
     const result = this.db.prepare("DELETE FROM users WHERE id = ?").run(id);
     return result.changes > 0;
+  }
+
+  // =====================================================================
+  // Refresh Token Management (令牌轮转机制)
+  // =====================================================================
+
+  /**
+   * 创建 Refresh Token — 生成随机令牌并存储 hash。
+   *
+   * @param userId 用户 ID
+   * @param familyId 可选的令牌家族 ID（轮转时传入）
+   * @returns { rawToken, id, familyId }
+   */
+  createRefreshToken(
+    userId: number,
+    familyId?: string,
+  ): { rawToken: string; id: string; familyId: string } {
+    if (!this.db)
+      throw new Error("AuthService: DB not initialized for refresh tokens");
+
+    const id = randomUUID();
+    const rawToken = randomBytes(32).toString("hex"); // 256-bit token
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const fid = familyId ?? randomUUID();
+    const expiresAt = new Date(
+      Date.now() + REFRESH_TOKEN_EXPIRY_SECONDS * 1000,
+    ).toISOString();
+
+    this.db
+      .prepare(
+        `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(id, userId, tokenHash, fid, expiresAt);
+
+    return { rawToken, id, familyId: fid };
+  }
+
+  /**
+   * 轮转 Refresh Token — 验证旧令牌，签发新的 access + refresh token。
+   *
+   * 安全机制:
+   * 1. 正常令牌 → 签发新对，撤销旧令牌
+   * 2. 已撤销但在宽限期内 → 返回 replacement 令牌对（多标签页场景）
+   * 3. 已撤销超出宽限期 → 令牌复用攻击 → 撤销整个 family → null
+   * 4. 用户不存在/已停用 → null
+   */
+  rotateRefreshToken(rawToken: string): {
+    accessToken: string;
+    refreshToken: string;
+    user: SafeUserRecord;
+    accessExpiresIn: number;
+    refreshExpiresIn: number;
+  } | null {
+    if (!this.db) return null;
+
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const record = this.db
+      .prepare("SELECT * FROM refresh_tokens WHERE token_hash = ?")
+      .get(tokenHash) as RefreshTokenRecord | undefined;
+
+    if (!record) return null;
+
+    // 检查过期
+    if (new Date(record.expires_at) <= new Date()) {
+      // 过期令牌 — 清理
+      this.db.prepare("DELETE FROM refresh_tokens WHERE id = ?").run(record.id);
+      return null;
+    }
+
+    // 验证用户仍存在且活跃
+    const user = this.getUserById(record.user_id);
+    if (!user || !user.is_active) {
+      // 用户已删除/停用 — 撤销所有令牌
+      this.revokeTokenFamily(record.family_id);
+      return null;
+    }
+
+    // Case 1: 令牌未被撤销 — 正常轮转
+    if (!record.revoked_at) {
+      // C3 FIX: 事务包裹 INSERT + UPDATE — 保证原子性
+      const rotateCase1 = this.db.transaction(() => {
+        const newRefresh = this.createRefreshToken(
+          record.user_id,
+          record.family_id,
+        );
+
+        // 撤销旧令牌 (标记 replaced_by)
+        this.db!
+          .prepare(
+            `UPDATE refresh_tokens
+             SET revoked_at = datetime('now'), replaced_by = ?
+             WHERE id = ?`,
+          )
+          .run(newRefresh.id, record.id);
+
+        return newRefresh;
+      });
+
+      const newRefresh = rotateCase1();
+
+      const accessToken = signJwt(
+        { sub: user.id, role: user.role, username: user.username },
+        this.jwtSecret,
+        this.jwtExpirySeconds,
+      );
+
+      return {
+        accessToken,
+        refreshToken: newRefresh.rawToken,
+        user,
+        accessExpiresIn: this.jwtExpirySeconds,
+        refreshExpiresIn: REFRESH_TOKEN_EXPIRY_SECONDS,
+      };
+    }
+
+    // Case 2 & 3: 令牌已被撤销 — 检查宽限期
+    const revokedAt = new Date(record.revoked_at).getTime();
+    const now = Date.now();
+    const gracePeriodMs = REFRESH_TOKEN_REUSE_GRACE_SECONDS * 1000;
+
+    if (record.replaced_by && now - revokedAt < gracePeriodMs) {
+      // Case 2: 宽限期内 — 多标签页场景
+      // 找到 family 中最新的未撤销令牌
+      const latestActive = this.db
+        .prepare(
+          `SELECT * FROM refresh_tokens
+           WHERE family_id = ? AND revoked_at IS NULL
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(record.family_id) as RefreshTokenRecord | undefined;
+
+      if (latestActive) {
+        // C3 FIX: 事务包裹 INSERT + UPDATE — 保证原子性
+        const rotateCase2 = this.db.transaction(() => {
+          const newRefresh = this.createRefreshToken(
+            record.user_id,
+            record.family_id,
+          );
+
+          // 撤销 latestActive（它已被 newRefresh 替代）
+          this.db!
+            .prepare(
+              `UPDATE refresh_tokens
+               SET revoked_at = datetime('now'), replaced_by = ?
+               WHERE id = ?`,
+            )
+            .run(newRefresh.id, latestActive.id);
+
+          return newRefresh;
+        });
+
+        const newRefresh = rotateCase2();
+
+        const accessToken = signJwt(
+          { sub: user.id, role: user.role, username: user.username },
+          this.jwtSecret,
+          this.jwtExpirySeconds,
+        );
+
+        return {
+          accessToken,
+          refreshToken: newRefresh.rawToken,
+          user,
+          accessExpiresIn: this.jwtExpirySeconds,
+          refreshExpiresIn: REFRESH_TOKEN_EXPIRY_SECONDS,
+        };
+      }
+    }
+
+    // Case 3: 超出宽限期或无替代令牌 — 令牌复用攻击
+    log.warn("Refresh token reuse detected — revoking family", {
+      familyId: record.family_id,
+      userId: record.user_id,
+    });
+    this.revokeTokenFamily(record.family_id);
+    return null;
+  }
+
+  /**
+   * 撤销令牌家族 — 安全响应：令牌复用攻击或用户停用时使用。
+   */
+  revokeTokenFamily(familyId: string): void {
+    if (!this.db) return;
+    this.db
+      .prepare(
+        `UPDATE refresh_tokens
+         SET revoked_at = datetime('now')
+         WHERE family_id = ? AND revoked_at IS NULL`,
+      )
+      .run(familyId);
+  }
+
+  /**
+   * 撤销用户所有 Refresh Token — 密码变更、用户停用时使用。
+   */
+  revokeAllUserRefreshTokens(userId: number): void {
+    if (!this.db) return;
+    this.db
+      .prepare(
+        `UPDATE refresh_tokens
+         SET revoked_at = datetime('now')
+         WHERE user_id = ? AND revoked_at IS NULL`,
+      )
+      .run(userId);
+  }
+
+  /**
+   * 清理过期 Refresh Token — 定期调用防止表无限增长。
+   */
+  cleanupExpiredRefreshTokens(): number {
+    if (!this.db) return 0;
+    const result = this.db
+      .prepare(
+        `DELETE FROM refresh_tokens
+         WHERE expires_at < datetime('now')
+            OR (revoked_at IS NOT NULL AND revoked_at < datetime('now', '-1 day'))`,
+      )
+      .run();
+    return result.changes;
   }
 
   /**
