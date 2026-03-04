@@ -7,6 +7,7 @@
 
 import type { QdrantService } from "../services/qdrant.js";
 import type { EmbeddingService } from "../services/embedding.js";
+import type { BM25Encoder } from "../services/bm25.js";
 import type { RateLimiter } from "../utils/rate-limiter.js";
 import { log } from "../utils/logger.js";
 import {
@@ -29,6 +30,8 @@ export interface StatusHandlerDeps {
   defaultProject: string;
   /** API 预算护城河（可选注入） */
   rateLimiter?: RateLimiter | undefined;
+  /** BM25 稀疏编码器（可选注入，暴露 hybrid_search 状态） */
+  bm25?: BM25Encoder | undefined;
 }
 
 /**
@@ -98,6 +101,13 @@ export async function handleStatus(
   if (deps.rateLimiter) {
     result.cost_guard = deps.rateLimiter.getStats();
   }
+
+  // 注入混合检索能力状态
+  result.hybrid_search = {
+    bm25_enabled: !!deps.bm25,
+    fusion: deps.bm25 ? "rrf" : "disabled",
+    bm25_vocab_size: deps.bm25?.vocabSize ?? 0,
+  };
 
   log.info("memory_status", result);
 

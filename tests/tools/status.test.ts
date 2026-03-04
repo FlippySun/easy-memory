@@ -124,4 +124,26 @@ describe("handleStatus", () => {
     const result = await handleStatus({}, deps);
     expect(result.cost_guard).toBeUndefined();
   });
+
+  // ----- Hybrid Search -----
+
+  it("should report hybrid_search enabled when bm25 is injected", async () => {
+    const { BM25Encoder } = await import("../../src/services/bm25.js");
+    deps.bm25 = new BM25Encoder();
+    const result = await handleStatus({}, deps);
+
+    expect(result.hybrid_search).toBeDefined();
+    expect(result.hybrid_search!.bm25_enabled).toBe(true);
+    expect(result.hybrid_search!.fusion).toBe("rrf");
+    expect(result.hybrid_search!.bm25_vocab_size).toBe(30000);
+  });
+
+  it("should report hybrid_search disabled when bm25 is not injected", async () => {
+    const result = await handleStatus({}, deps);
+
+    expect(result.hybrid_search).toBeDefined();
+    expect(result.hybrid_search!.bm25_enabled).toBe(false);
+    expect(result.hybrid_search!.fusion).toBe("disabled");
+    expect(result.hybrid_search!.bm25_vocab_size).toBe(0);
+  });
 });

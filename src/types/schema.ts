@@ -189,6 +189,12 @@ export interface MemoryStatusOutput {
     gemini_calls_today: number;
     gemini_circuit_open: boolean;
   };
+  /** 混合检索能力状态 — Dense + Sparse(BM25) + RRF 融合 */
+  hybrid_search?: {
+    bm25_enabled: boolean;
+    fusion: "rrf" | "disabled";
+    bm25_vocab_size: number;
+  };
 }
 
 // ===== 统一阈值表 [CORE_SCHEMA §5] =====
