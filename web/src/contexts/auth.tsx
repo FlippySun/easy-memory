@@ -51,6 +51,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshUser();
   }, [refreshUser]);
 
+  // 监听 API 客户端发出的会话过期事件 — 清除前端认证状态（由 React Router 跳转 /login）
+  useEffect(() => {
+    const handler = () => {
+      setState({
+        user: null,
+        permissions: [],
+        isLoading: false,
+        isAuthenticated: false,
+      });
+    };
+    window.addEventListener("auth:session-expired", handler);
+    return () => window.removeEventListener("auth:session-expired", handler);
+  }, []);
+
   const login = useCallback(async (username: string, password: string) => {
     const res = await authApi.login(username, password);
     // SEC-COOKIE: 不再调用 setToken — httpOnly cookie 由服务端 Set-Cookie 写入

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2025-07-07
+
+### Fixed
+
+- **[Critical] 前端登录页无限重载循环**: `request()` 中 401 refresh 失败后使用 `window.location.href = "/login"` 导致全页重载 → `AuthProvider` 重新 mount → `refreshUser()` 再次触发 → 无限循环（页面空白）。改用 `CustomEvent('auth:session-expired')` 通知 AuthContext 清除状态，由 React Router `<Navigate>` 处理跳转。
+
 ## [0.5.0] - 2025-07-07
 
 ### Added

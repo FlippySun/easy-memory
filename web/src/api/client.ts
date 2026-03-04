@@ -104,8 +104,9 @@ async function request<T>(
       return request<T>(path, options, true);
     }
 
-    // refresh 失败 — 跳转登录页
-    window.location.href = "/login";
+    // refresh 失败 — 通知 AuthContext 清除状态（由 React Router 处理页面跳转）
+    // 禁止使用 window.location.href — 会导致全页重载→AuthProvider re-mount→无限循环
+    window.dispatchEvent(new CustomEvent("auth:session-expired"));
     throw new ApiError(401, "Session expired, please login again");
   }
 
