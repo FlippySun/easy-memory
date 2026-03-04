@@ -59,8 +59,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly string[]> = {
     "keys:self",
   ],
   user: [
-    "analytics:read",
-    "audit:read",
     "memory:save",
     "memory:search",
     "memory:forget",

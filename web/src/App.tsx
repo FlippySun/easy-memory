@@ -77,7 +77,9 @@ export function App() {
       />
       <Route
         path="/register"
-        element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />}
+        element={
+          isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />
+        }
       />
 
       <Route

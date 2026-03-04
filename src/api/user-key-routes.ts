@@ -18,10 +18,7 @@ import type { Context, Next } from "hono";
 import { log } from "../utils/logger.js";
 import type { AuthService } from "../services/auth.js";
 import type { ApiKeyManager } from "../services/api-key-manager.js";
-import {
-  COOKIE_ACCESS_TOKEN,
-  ROLE_PERMISSIONS,
-} from "../types/auth-schema.js";
+import { COOKIE_ACCESS_TOKEN, ROLE_PERMISSIONS } from "../types/auth-schema.js";
 import type { JwtPayload, UserRole } from "../types/auth-schema.js";
 import { z } from "zod/v4";
 
@@ -61,10 +58,7 @@ function jwtAuth(
 ): (c: Context<Env>, next: Next) => Promise<Response | void> {
   return async (c: Context<Env>, next: Next) => {
     if (!adminToken) {
-      return c.json(
-        { error: "Authentication service not configured" },
-        503,
-      );
+      return c.json({ error: "Authentication service not configured" }, 503);
     }
 
     let token: string | undefined;
@@ -210,10 +204,7 @@ export function createUserKeyRoutes(config: UserKeyRoutesConfig) {
 
     const success = apiKeyManager.revokeKeyForUser(keyId, payload.sub);
     if (!success) {
-      return c.json(
-        { error: "Key not found or not owned by you" },
-        404,
-      );
+      return c.json({ error: "Key not found or not owned by you" }, 404);
     }
 
     log.info("User revoked API key", {

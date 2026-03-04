@@ -27,11 +27,15 @@ export function DashboardPage() {
     error: null,
   });
 
+  const isAdmin = user?.role === "admin";
+
   const fetchData = useCallback(async () => {
+    if (!isAdmin) {
+      setData({ overview: null, loading: false, error: null });
+      return;
+    }
     try {
-      const overview = hasPermission("analytics:read")
-        ? await adminApi.getOverview()
-        : null;
+      const overview = await adminApi.getOverview();
       setData({ overview, loading: false, error: null });
     } catch (err) {
       setData({
@@ -40,7 +44,7 @@ export function DashboardPage() {
         error: err instanceof Error ? err.message : "Failed to load",
       });
     }
-  }, [hasPermission]);
+  }, [isAdmin]);
 
   useEffect(() => {
     fetchData();

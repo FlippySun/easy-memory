@@ -374,8 +374,10 @@ describe("AuthService", () => {
 
     it("should return limited permissions for user", () => {
       const perms = service.getPermissions("user");
-      expect(perms).toContain("analytics:read");
       expect(perms).toContain("memory:save");
+      expect(perms).toContain("keys:self");
+      expect(perms).not.toContain("analytics:read");
+      expect(perms).not.toContain("audit:read");
       expect(perms).not.toContain("users:list");
       expect(perms).not.toContain("keys:create");
       expect(perms).not.toContain("config:update");

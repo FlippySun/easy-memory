@@ -92,15 +92,11 @@ export async function createRemoteMcpServer(
     {
       content: z
         .string()
-        .describe(
-          "The content to save. Be specific and include full context.",
-        ),
+        .describe("The content to save. Be specific and include full context."),
       project: z
         .string()
         .optional()
-        .describe(
-          "Project or namespace to organize memories under.",
-        ),
+        .describe("Project or namespace to organize memories under."),
       tags: z
         .array(z.string())
         .optional()
@@ -120,7 +116,13 @@ export async function createRemoteMcpServer(
     },
     async (args) => {
       try {
-        const result = await remoteCall(baseUrl, token, "POST", "/api/save", args);
+        const result = await remoteCall(
+          baseUrl,
+          token,
+          "POST",
+          "/api/save",
+          args,
+        );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };
@@ -153,18 +155,18 @@ export async function createRemoteMcpServer(
         .number()
         .optional()
         .describe("Minimum relevance score (0-1, default: 0.3)."),
-      tags: z
-        .array(z.string())
-        .optional()
-        .describe("Filter by tags."),
-      category: z
-        .string()
-        .optional()
-        .describe("Filter by category."),
+      tags: z.array(z.string()).optional().describe("Filter by tags."),
+      category: z.string().optional().describe("Filter by category."),
     },
     async (args) => {
       try {
-        const result = await remoteCall(baseUrl, token, "POST", "/api/search", args);
+        const result = await remoteCall(
+          baseUrl,
+          token,
+          "POST",
+          "/api/search",
+          args,
+        );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };
@@ -192,7 +194,13 @@ export async function createRemoteMcpServer(
     },
     async (args) => {
       try {
-        const result = await remoteCall(baseUrl, token, "POST", "/api/forget", args);
+        const result = await remoteCall(
+          baseUrl,
+          token,
+          "POST",
+          "/api/forget",
+          args,
+        );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };

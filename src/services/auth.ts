@@ -614,13 +614,11 @@ export class AuthService {
         );
 
         // 撤销旧令牌 (标记 replaced_by)
-        this.db!
-          .prepare(
-            `UPDATE refresh_tokens
+        this.db!.prepare(
+          `UPDATE refresh_tokens
              SET revoked_at = datetime('now'), replaced_by = ?
              WHERE id = ?`,
-          )
-          .run(newRefresh.id, record.id);
+        ).run(newRefresh.id, record.id);
 
         return newRefresh;
       });
@@ -667,13 +665,11 @@ export class AuthService {
           );
 
           // 撤销 latestActive（它已被 newRefresh 替代）
-          this.db!
-            .prepare(
-              `UPDATE refresh_tokens
+          this.db!.prepare(
+            `UPDATE refresh_tokens
                SET revoked_at = datetime('now'), replaced_by = ?
                WHERE id = ?`,
-            )
-            .run(newRefresh.id, latestActive.id);
+          ).run(newRefresh.id, latestActive.id);
 
           return newRefresh;
         });

@@ -215,7 +215,9 @@ export interface BanRecord {
 export const adminApi = {
   // Keys
   listKeys: () =>
-    api.get<{ data: ApiKeyRecord[]; pagination: { total_count: number } }>("/admin/keys"),
+    api.get<{ data: ApiKeyRecord[]; pagination: { total_count: number } }>(
+      "/admin/keys",
+    ),
   createKey: (data: {
     name: string;
     scopes?: string;
@@ -236,7 +238,9 @@ export const adminApi = {
 
   // Bans
   listBans: () =>
-    api.get<{ data: BanRecord[]; pagination: { total_count: number } }>("/admin/bans"),
+    api.get<{ data: BanRecord[]; pagination: { total_count: number } }>(
+      "/admin/bans",
+    ),
   createBan: (data: {
     target_type: string;
     target_value: string;
@@ -322,6 +326,5 @@ export const userKeysApi = {
   create: (name: string) =>
     api.post<UserKeyCreateResponse>("/user/keys", { name }),
   /** 吊销 API Key */
-  revoke: (id: string) =>
-    api.delete<{ success: boolean }>(`/user/keys/${id}`),
+  revoke: (id: string) => api.delete<{ success: boolean }>(`/user/keys/${id}`),
 };

@@ -62,8 +62,7 @@ export default function Register() {
       await register(username, password);
       navigate("/");
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Registration failed";
+      const msg = err instanceof Error ? err.message : "Registration failed";
       // 尝试从 API 响应中提取更具体的错误信息
       if (msg.includes("409") || msg.includes("already exists")) {
         setError("Username already exists. Please choose a different one.");
@@ -82,9 +81,7 @@ export default function Register() {
       <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-md">
         <div className="text-center mb-6">
           <Brain className="w-12 h-12 text-primary-600 mx-auto mb-2" />
-          <h1 className="text-2xl font-bold text-slate-900">
-            Easy Memory
-          </h1>
+          <h1 className="text-2xl font-bold text-slate-900">Easy Memory</h1>
           <p className="text-sm text-slate-500 mt-1">Create your account</p>
         </div>
 
@@ -181,11 +178,7 @@ export default function Register() {
             )}
           </div>
 
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={loading}
-          >
+          <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Creating account..." : "Create Account"}
           </Button>
         </form>
