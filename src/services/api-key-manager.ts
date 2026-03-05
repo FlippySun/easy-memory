@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at TEXT NOT NULL,
   expires_at TEXT,
   revoked_at TEXT,
+  soft_deleted_at TEXT,
+  semi_deleted_at TEXT,
   last_used_at TEXT,
   rate_limit_per_minute INTEGER,
   scopes TEXT NOT NULL DEFAULT '[]',
@@ -83,8 +85,20 @@ CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions(action);
 const MIGRATION_ADD_USER_ID = `
 ALTER TABLE api_keys ADD COLUMN user_id INTEGER;
 `;
+const MIGRATION_ADD_SOFT_DELETED_AT = `
+ALTER TABLE api_keys ADD COLUMN soft_deleted_at TEXT;
+`;
+const MIGRATION_ADD_SEMI_DELETED_AT = `
+ALTER TABLE api_keys ADD COLUMN semi_deleted_at TEXT;
+`;
 const MIGRATION_ADD_USER_ID_INDEX = `
 CREATE INDEX IF NOT EXISTS idx_keys_user_id ON api_keys(user_id);
+`;
+const MIGRATION_ADD_SOFT_DELETED_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_keys_soft_deleted ON api_keys(soft_deleted_at);
+`;
+const MIGRATION_ADD_SEMI_DELETED_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_keys_semi_deleted ON api_keys(semi_deleted_at);
 `;
 
 // =========================================================================
@@ -143,8 +157,11 @@ export class ApiKeyManager {
       this.db.pragma("synchronous = NORMAL");
       this.db.exec(CREATE_TABLES_SQL);
 
-      // v0.6.0 向后兼容迁移 — 为已有数据库添加 user_id 列
-      this.migrateUserIdColumn();
+      // 向后兼容迁移
+      this.migrateSchemaColumns();
+
+      // 启动时清理超过 30 天的半真删 key
+      this.purgeSemiDeletedKeys(30);
 
       this.prepareStatements();
       this.loadCache();
@@ -165,17 +182,38 @@ export class ApiKeyManager {
    * 向后兼容迁移：如果 api_keys 表缺少 user_id 列，添加之。
    * @internal
    */
-  private migrateUserIdColumn(): void {
+  private migrateSchemaColumns(): void {
     if (!this.db) return;
     const columns = this.db
       .prepare("PRAGMA table_info(api_keys)")
       .all() as Array<{ name: string }>;
     const hasUserId = columns.some((col) => col.name === "user_id");
+    const hasSoftDeletedAt = columns.some(
+      (col) => col.name === "soft_deleted_at",
+    );
+    const hasSemiDeletedAt = columns.some(
+      (col) => col.name === "semi_deleted_at",
+    );
+
     if (!hasUserId) {
       this.db.exec(MIGRATION_ADD_USER_ID);
-      this.db.exec(MIGRATION_ADD_USER_ID_INDEX);
       log.info("Migration: added user_id column to api_keys table");
     }
+
+    if (!hasSoftDeletedAt) {
+      this.db.exec(MIGRATION_ADD_SOFT_DELETED_AT);
+      log.info("Migration: added soft_deleted_at column to api_keys table");
+    }
+
+    if (!hasSemiDeletedAt) {
+      this.db.exec(MIGRATION_ADD_SEMI_DELETED_AT);
+      log.info("Migration: added semi_deleted_at column to api_keys table");
+    }
+
+    // 始终补齐索引（幂等）
+    this.db.exec(MIGRATION_ADD_USER_ID_INDEX);
+    this.db.exec(MIGRATION_ADD_SOFT_DELETED_INDEX);
+    this.db.exec(MIGRATION_ADD_SEMI_DELETED_INDEX);
   }
 
   /**
@@ -231,6 +269,8 @@ export class ApiKeyManager {
       created_at: now,
       expires_at: input.expires_at ?? null,
       revoked_at: null,
+      soft_deleted_at: null,
+      semi_deleted_at: null,
       last_used_at: null,
       rate_limit_per_minute: input.rate_limit_per_minute ?? null,
       scopes: JSON.stringify(scopes),
@@ -248,6 +288,8 @@ export class ApiKeyManager {
       record.created_at,
       record.expires_at,
       record.revoked_at,
+      record.soft_deleted_at,
+      record.semi_deleted_at,
       record.last_used_at,
       record.rate_limit_per_minute,
       record.scopes,
@@ -321,6 +363,9 @@ export class ApiKeyManager {
     // 检查是否已吊销
     if (record.revoked_at) return null;
 
+    // 假删除/半真删 key 不可用
+    if (record.soft_deleted_at || record.semi_deleted_at) return null;
+
     // 检查是否已过期
     if (record.expires_at && record.expires_at < new Date().toISOString()) {
       return null;
@@ -335,15 +380,26 @@ export class ApiKeyManager {
   listKeys(query: ListApiKeysQuery): AdminPaginatedResponse<ApiKeyResponse> {
     this.ensureOpen();
 
+    // 每次列表查询前执行轻量清理：删除超过 30 天的半真删 key
+    this.purgeSemiDeletedKeys(30);
+
     const conditions: string[] = [];
     const params: unknown[] = [];
 
+    // 半真删 key 永不在 admin UI 列表中展示
+    conditions.push("semi_deleted_at IS NULL");
+
     // Status 过滤
     if (query.status === "active") {
+      conditions.push("soft_deleted_at IS NULL");
       conditions.push("revoked_at IS NULL");
       conditions.push("(expires_at IS NULL OR expires_at > datetime('now'))");
-    } else if (query.status === "revoked") {
+    } else if (query.status === "disabled" || query.status === "revoked") {
+      // revoked 作为 disabled 的向后兼容别名
+      conditions.push("soft_deleted_at IS NULL");
       conditions.push("revoked_at IS NOT NULL");
+    } else if (query.status === "soft_deleted") {
+      conditions.push("soft_deleted_at IS NOT NULL");
     }
 
     // Name 模糊搜索
@@ -401,6 +457,11 @@ export class ApiKeyManager {
     const existing = this.stmtGetById!.get(id) as ApiKeyRecord | undefined;
     if (!existing) return null;
 
+    // 假删除/半真删 key 不允许再修改（包含 enable/disable）
+    if (existing.soft_deleted_at || existing.semi_deleted_at) {
+      return toApiKeyResponse(existing);
+    }
+
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -428,6 +489,22 @@ export class ApiKeyManager {
       params.push(JSON.stringify(merged));
     }
 
+    if (input.is_active !== undefined) {
+      if (input.is_active) {
+        // Enable: clear revoked marker (if present)
+        if (existing.revoked_at !== null) {
+          setClauses.push("revoked_at = ?");
+          params.push(null);
+        }
+      } else {
+        // Disable: set revoked marker if currently active
+        if (existing.revoked_at === null) {
+          setClauses.push("revoked_at = ?");
+          params.push(new Date().toISOString());
+        }
+      }
+    }
+
     if (setClauses.length === 0) return toApiKeyResponse(existing);
 
     params.push(id);
@@ -445,7 +522,10 @@ export class ApiKeyManager {
   }
 
   /**
-   * 吊销 API Key (软删除)。
+   * 管理员删除 API Key（两段式）。
+   *
+   * - 第一次删除：假删除（soft_deleted_at）
+   * - 第二次删除：半真删（semi_deleted_at，admin UI 不再显示）
    */
   revokeKey(id: string): ApiKeyResponse | null {
     this.ensureOpen();
@@ -453,20 +533,38 @@ export class ApiKeyManager {
     const existing = this.stmtGetById!.get(id) as ApiKeyRecord | undefined;
     if (!existing) return null;
 
-    if (existing.revoked_at) {
-      // 已吊销
+    if (existing.semi_deleted_at) {
+      // 已半真删：幂等返回
       return toApiKeyResponse(existing);
     }
 
     const now = new Date().toISOString();
-    this.stmtRevokeKey!.run(now, id);
 
-    // 刷新缓存
-    const updated = { ...existing, revoked_at: now };
-    this.cache.set(updated.key_hash, updated);
-    this.cacheById.set(updated.id, updated);
+    // 第一阶段：假删除
+    if (!existing.soft_deleted_at) {
+      this.db!.prepare(
+        "UPDATE api_keys SET soft_deleted_at = ? WHERE id = ?",
+      ).run(now, id);
 
-    log.info("API key revoked", { id, prefix: existing.prefix });
+      const updated = { ...existing, soft_deleted_at: now };
+      // 从活跃缓存移除，防止继续被鉴权命中
+      this.cache.delete(updated.key_hash);
+      this.cacheById.set(updated.id, updated);
+
+      log.info("API key soft-deleted", { id, prefix: existing.prefix });
+      return toApiKeyResponse(updated);
+    }
+
+    // 第二阶段：半真删
+    this.db!.prepare(
+      "UPDATE api_keys SET semi_deleted_at = ? WHERE id = ?",
+    ).run(now, id);
+
+    const updated = { ...existing, semi_deleted_at: now };
+    this.cache.delete(updated.key_hash);
+    this.cacheById.delete(updated.id);
+
+    log.info("API key semi-deleted", { id, prefix: existing.prefix });
 
     return toApiKeyResponse(updated);
   }
@@ -481,6 +579,7 @@ export class ApiKeyManager {
 
     const existing = this.stmtGetById!.get(id) as ApiKeyRecord | undefined;
     if (!existing) return null;
+    if (existing.soft_deleted_at || existing.semi_deleted_at) return null;
     if (existing.revoked_at) return null; // 吊销的 key 不能轮转
 
     // 原子操作: 在事务中同时吊销旧 key + 创建新 key
@@ -503,6 +602,8 @@ export class ApiKeyManager {
         now,
         existing.expires_at,
         null, // revoked_at
+        null, // soft_deleted_at
+        null, // semi_deleted_at
         null, // last_used_at
         existing.rate_limit_per_minute,
         existing.scopes,
@@ -527,6 +628,8 @@ export class ApiKeyManager {
       key_hash: newKeyHash,
       created_at: now,
       revoked_at: null,
+      soft_deleted_at: null,
+      semi_deleted_at: null,
       last_used_at: null,
       total_requests: 0,
       created_by: createdBy,
@@ -578,8 +681,9 @@ export class ApiKeyManager {
    */
   countActiveKeysByUser(userId: number): number {
     this.ensureOpen();
+    this.purgeSemiDeletedKeys(30);
     const result = this.db!.prepare(
-      "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = ? AND revoked_at IS NULL",
+      "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = ? AND revoked_at IS NULL AND soft_deleted_at IS NULL AND semi_deleted_at IS NULL",
     ).get(userId) as { cnt: number } | undefined;
     return result?.cnt ?? 0;
   }
@@ -589,8 +693,9 @@ export class ApiKeyManager {
    */
   listKeysByUser(userId: number): ApiKeyResponse[] {
     this.ensureOpen();
+    this.purgeSemiDeletedKeys(30);
     const rows = this.db!.prepare(
-      "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+      "SELECT * FROM api_keys WHERE user_id = ? AND soft_deleted_at IS NULL AND semi_deleted_at IS NULL ORDER BY created_at DESC",
     ).all(userId) as ApiKeyRecord[];
     return rows.map(toApiKeyResponse);
   }
@@ -615,7 +720,7 @@ export class ApiKeyManager {
     const txn = this.db!.transaction(() => {
       const count = (
         this.db!.prepare(
-          "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = ? AND revoked_at IS NULL",
+          "SELECT COUNT(*) AS cnt FROM api_keys WHERE user_id = ? AND revoked_at IS NULL AND soft_deleted_at IS NULL AND semi_deleted_at IS NULL",
         ).get(userId) as { cnt: number }
       ).cnt;
 
@@ -635,10 +740,10 @@ export class ApiKeyManager {
   }
 
   /**
-   * 用户删除（吊销）自己的 API Key。
+   * 用户删除自己的 API Key（假删除）。
    * 校验 key 的 user_id 是否匹配。
    *
-   * @returns true 如果成功吊销
+   * @returns true 如果成功假删除
    */
   revokeKeyForUser(keyId: string, userId: number): boolean {
     this.ensureOpen();
@@ -646,17 +751,19 @@ export class ApiKeyManager {
     const record = this.stmtGetById!.get(keyId) as ApiKeyRecord | undefined;
     if (!record) return false;
     if (record.user_id !== userId) return false; // 权限检查
-    if (record.revoked_at) return false; // 已吊销
+    if (record.soft_deleted_at || record.semi_deleted_at) return false; // 已删除态
 
     const now = new Date().toISOString();
-    this.stmtRevokeKey!.run(now, keyId);
+    this.db!.prepare(
+      "UPDATE api_keys SET soft_deleted_at = ? WHERE id = ?",
+    ).run(now, keyId);
 
     // 更新缓存
-    const revoked = { ...record, revoked_at: now };
-    this.cache.set(record.key_hash, revoked);
-    this.cacheById.set(record.id, revoked);
+    const softDeleted = { ...record, soft_deleted_at: now };
+    this.cache.delete(record.key_hash);
+    this.cacheById.set(record.id, softDeleted);
 
-    log.info("User revoked own API key", {
+    log.info("User soft-deleted own API key", {
       keyId,
       userId,
       prefix: record.prefix,
@@ -758,9 +865,9 @@ export class ApiKeyManager {
     this.stmtInsertKey = this.db!.prepare(`
       INSERT INTO api_keys (
         id, name, prefix, key_hash, created_at, expires_at,
-        revoked_at, last_used_at, rate_limit_per_minute,
+        revoked_at, soft_deleted_at, semi_deleted_at, last_used_at, rate_limit_per_minute,
         scopes, metadata, total_requests, created_by, user_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.stmtGetByHash = this.db!.prepare(
@@ -796,7 +903,9 @@ export class ApiKeyManager {
     if (!this.db) return;
 
     const rows = this.db
-      .prepare("SELECT * FROM api_keys WHERE revoked_at IS NULL")
+      .prepare(
+        "SELECT * FROM api_keys WHERE revoked_at IS NULL AND soft_deleted_at IS NULL AND semi_deleted_at IS NULL",
+      )
       .all() as ApiKeyRecord[];
 
     for (const row of rows) {
@@ -812,5 +921,48 @@ export class ApiKeyManager {
     if (!this.db) {
       throw new Error("ApiKeyManager is not initialized. Call open() first.");
     }
+  }
+
+  /**
+   * 物理清理半真删超过 N 天的 key。
+   *
+   * @returns 删除条数
+   */
+  private purgeSemiDeletedKeys(retentionDays: number): number {
+    if (!this.db) return 0;
+
+    const cutoff = new Date(
+      Date.now() - retentionDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const stale = this.db
+      .prepare(
+        "SELECT id, key_hash FROM api_keys WHERE semi_deleted_at IS NOT NULL AND semi_deleted_at <= ?",
+      )
+      .all(cutoff) as Array<{ id: string; key_hash: string }>;
+
+    if (stale.length === 0) return 0;
+
+    const stmtDelete = this.db.prepare("DELETE FROM api_keys WHERE id = ?");
+    const txn = this.db.transaction((rows: Array<{ id: string }>) => {
+      for (const row of rows) {
+        stmtDelete.run(row.id);
+      }
+    });
+    txn(stale);
+
+    for (const row of stale) {
+      this.cache.delete(row.key_hash);
+    }
+    for (const row of stale) {
+      this.cacheById.delete(row.id);
+    }
+
+    log.info("Purged stale semi-deleted API keys", {
+      purged: stale.length,
+      retentionDays,
+    });
+
+    return stale.length;
   }
 }

@@ -5,7 +5,7 @@
  * 路由:
  * - GET  /api/user/keys — 列出当前用户的 API Keys
  * - POST /api/user/keys — 创建新 API Key (每用户最多 2 个活跃 key)
- * - DELETE /api/user/keys/:id — 吊销当前用户的 API Key
+ * - DELETE /api/user/keys/:id — 假删除当前用户的 API Key（仅用户侧隐藏）
  *
  * 认证: JWT httpOnly cookie (复用 auth-routes 的 jwtAuth 中间件)
  * 权限: keys:self
@@ -197,17 +197,20 @@ export function createUserKeyRoutes(config: UserKeyRoutesConfig) {
     }
   });
 
-  // ===== DELETE /:id — 吊销 API Key =====
+  // ===== DELETE /:id — 假删除 API Key =====
   app.delete("/:id", (c) => {
     const payload = c.get("jwtPayload")!;
     const keyId = c.req.param("id");
 
     const success = apiKeyManager.revokeKeyForUser(keyId, payload.sub);
     if (!success) {
-      return c.json({ error: "Key not found or not owned by you" }, 404);
+      return c.json(
+        { error: "Key not found, not owned by you, or already deleted" },
+        404,
+      );
     }
 
-    log.info("User revoked API key", {
+    log.info("User soft-deleted API key", {
       userId: payload.sub,
       username: payload.username,
       keyId,

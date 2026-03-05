@@ -46,6 +46,8 @@ export type BanType = (typeof BAN_TYPE)[number];
 export const ADMIN_ACTION = [
   "key_create",
   "key_revoke",
+  "key_soft_delete",
+  "key_semi_delete",
   "key_update",
   "key_rotate",
   "ban_create",
@@ -58,6 +60,16 @@ export type AdminAction = (typeof ADMIN_ACTION)[number];
 /** 排序方向 */
 export const SORT_ORDER = ["asc", "desc"] as const;
 export type SortOrder = (typeof SORT_ORDER)[number];
+
+/** API Key 生命周期状态 */
+export const API_KEY_LIFECYCLE_STATUS = [
+  "active",
+  "disabled",
+  "soft_deleted",
+  "semi_deleted",
+  "expired",
+] as const;
+export type ApiKeyLifecycleStatus = (typeof API_KEY_LIFECYCLE_STATUS)[number];
 
 // =========================================================================
 // API Key — 数据模型
@@ -82,6 +94,10 @@ export interface ApiKeyRecord {
   expires_at: string | null;
   /** 吊销时间 — null 表示未吊销 */
   revoked_at: string | null;
+  /** 假删除时间 — null 表示未假删除（普通用户不可见） */
+  soft_deleted_at: string | null;
+  /** 半真删时间 — null 表示未半真删（admin UI 不再显示） */
+  semi_deleted_at: string | null;
   /** 最近使用时间 */
   last_used_at: string | null;
   /** Per-key 每分钟限流 — null 表示使用全局默认 */
@@ -109,6 +125,8 @@ export interface ApiKeyResponse {
   created_at: string;
   expires_at: string | null;
   revoked_at: string | null;
+  soft_deleted_at: string | null;
+  semi_deleted_at: string | null;
   last_used_at: string | null;
   rate_limit_per_minute: number | null;
   scopes: ApiKeyScope[];
@@ -117,6 +135,8 @@ export interface ApiKeyResponse {
   created_by: string;
   /** 关联用户 ID — null 表示管理员全局 key (v0.6.0) */
   user_id: number | null;
+  /** 生命周期状态（用于 UI 区分禁用/假删/半真删） */
+  lifecycle_status: ApiKeyLifecycleStatus;
   /** 计算字段: not revoked AND not expired */
   is_active: boolean;
 }
@@ -171,8 +191,13 @@ export const UpdateApiKeySchema = z
     scopes: z.array(z.enum(API_KEY_SCOPE)).optional(),
     /** 更新元数据 (合并，不替换) */
     metadata: z.record(z.string(), z.unknown()).optional(),
+    /** 启用/禁用 key (可逆) */
+    is_active: z.boolean().optional(),
   })
-  .strip();
+  .strip()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: "At least one field must be provided",
+  });
 
 export type UpdateApiKeyInput = z.infer<typeof UpdateApiKeySchema>;
 
@@ -181,8 +206,10 @@ export const ListApiKeysQuerySchema = z
   .object({
     /** 按名称搜索 (模糊匹配) */
     name: z.string().optional(),
-    /** 过滤: 仅活跃 / 仅吊销 / 全部 */
-    status: z.enum(["active", "revoked", "all"]).default("all"),
+    /** 过滤: 仅活跃 / 仅禁用 / 仅假删 / 仅吊销(兼容) / 全部 */
+    status: z
+      .enum(["active", "disabled", "soft_deleted", "revoked", "all"])
+      .default("all"),
     /** 排序字段 */
     sort_by: z
       .enum(["created_at", "last_used_at", "total_requests", "name"])
@@ -418,7 +445,17 @@ export interface OperationDistribution {
 export function toApiKeyResponse(record: ApiKeyRecord): ApiKeyResponse {
   const now = new Date().toISOString();
   const isExpired = record.expires_at ? record.expires_at < now : false;
-  const isRevoked = !!record.revoked_at;
+  let lifecycleStatus: ApiKeyLifecycleStatus = "active";
+
+  if (record.semi_deleted_at) {
+    lifecycleStatus = "semi_deleted";
+  } else if (record.soft_deleted_at) {
+    lifecycleStatus = "soft_deleted";
+  } else if (isExpired) {
+    lifecycleStatus = "expired";
+  } else if (record.revoked_at) {
+    lifecycleStatus = "disabled";
+  }
 
   return {
     id: record.id,
@@ -427,6 +464,8 @@ export function toApiKeyResponse(record: ApiKeyRecord): ApiKeyResponse {
     created_at: record.created_at,
     expires_at: record.expires_at,
     revoked_at: record.revoked_at,
+    soft_deleted_at: record.soft_deleted_at,
+    semi_deleted_at: record.semi_deleted_at,
     last_used_at: record.last_used_at,
     rate_limit_per_minute: record.rate_limit_per_minute,
     scopes: safeJsonParse<ApiKeyScope[]>(record.scopes, []),
@@ -434,7 +473,8 @@ export function toApiKeyResponse(record: ApiKeyRecord): ApiKeyResponse {
     total_requests: record.total_requests,
     created_by: record.created_by,
     user_id: record.user_id,
-    is_active: !isRevoked && !isExpired,
+    lifecycle_status: lifecycleStatus,
+    is_active: lifecycleStatus === "active",
   };
 }
 

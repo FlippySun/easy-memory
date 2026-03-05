@@ -96,6 +96,18 @@ describe("UpdateApiKeySchema", () => {
     const result = UpdateApiKeySchema.safeParse({ expires_at: null });
     expect(result.success).toBe(true);
   });
+
+  it("accepts is_active boolean toggle", () => {
+    const disable = UpdateApiKeySchema.safeParse({ is_active: false });
+    const enable = UpdateApiKeySchema.safeParse({ is_active: true });
+    expect(disable.success).toBe(true);
+    expect(enable.success).toBe(true);
+  });
+
+  it("rejects empty object (prevents silent no-op)", () => {
+    const result = UpdateApiKeySchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("ListApiKeysQuerySchema", () => {
@@ -122,6 +134,11 @@ describe("ListApiKeysQuerySchema", () => {
   it("rejects page_size > 100", () => {
     const result = ListApiKeysQuerySchema.safeParse({ page_size: "101" });
     expect(result.success).toBe(false);
+  });
+
+  it("accepts soft_deleted status", () => {
+    const result = ListApiKeysQuerySchema.safeParse({ status: "soft_deleted" });
+    expect(result.success).toBe(true);
   });
 });
 
@@ -229,12 +246,15 @@ describe("toApiKeyResponse", () => {
     created_at: "2025-01-01T00:00:00Z",
     expires_at: null,
     revoked_at: null,
+    soft_deleted_at: null,
+    semi_deleted_at: null,
     last_used_at: null,
     rate_limit_per_minute: null,
     scopes: '["memory:read","memory:write"]',
     metadata: '{"team":"test"}',
     total_requests: 42,
     created_by: "system",
+    user_id: null,
   };
 
   it("converts record to response with parsed JSON fields", () => {
@@ -242,6 +262,7 @@ describe("toApiKeyResponse", () => {
     expect(response.scopes).toEqual(["memory:read", "memory:write"]);
     expect(response.metadata).toEqual({ team: "test" });
     expect(response.is_active).toBe(true);
+    expect(response.lifecycle_status).toBe("active");
   });
 
   it("marks expired key as inactive", () => {
@@ -251,15 +272,27 @@ describe("toApiKeyResponse", () => {
     };
     const response = toApiKeyResponse(expired);
     expect(response.is_active).toBe(false);
+    expect(response.lifecycle_status).toBe("expired");
   });
 
-  it("marks revoked key as inactive", () => {
+  it("marks revoked key as disabled", () => {
     const revoked = {
       ...baseRecord,
       revoked_at: "2025-06-01T00:00:00Z",
     };
     const response = toApiKeyResponse(revoked);
     expect(response.is_active).toBe(false);
+    expect(response.lifecycle_status).toBe("disabled");
+  });
+
+  it("marks soft deleted key with dedicated lifecycle status", () => {
+    const softDeleted = {
+      ...baseRecord,
+      soft_deleted_at: "2025-06-02T00:00:00Z",
+    };
+    const response = toApiKeyResponse(softDeleted);
+    expect(response.is_active).toBe(false);
+    expect(response.lifecycle_status).toBe("soft_deleted");
   });
 
   it("handles malformed JSON gracefully", () => {

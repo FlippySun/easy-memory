@@ -151,7 +151,7 @@ describe("ApiKeyManager", () => {
       expect(result.pagination.total_count).toBe(3);
     });
 
-    it("filters active keys only", () => {
+    it("filters disabled(revoked alias) keys only", () => {
       const keys = manager.listKeys({
         status: "all",
         sort_by: "created_at",
@@ -159,7 +159,7 @@ describe("ApiKeyManager", () => {
         page: 1,
         page_size: 20,
       });
-      manager.revokeKey(keys.data[0].id);
+      manager.updateKey(keys.data[0].id, { is_active: false });
 
       const active = manager.listKeys({
         status: "active",
@@ -171,7 +171,7 @@ describe("ApiKeyManager", () => {
       expect(active.data.length).toBe(2);
     });
 
-    it("filters revoked keys only", () => {
+    it("filters soft-deleted keys only", () => {
       const keys = manager.listKeys({
         status: "all",
         sort_by: "created_at",
@@ -180,6 +180,50 @@ describe("ApiKeyManager", () => {
         page_size: 20,
       });
       manager.revokeKey(keys.data[0].id);
+
+      const softDeleted = manager.listKeys({
+        status: "soft_deleted",
+        sort_by: "created_at",
+        sort_order: "desc",
+        page: 1,
+        page_size: 20,
+      });
+      expect(softDeleted.data.length).toBe(1);
+      expect(softDeleted.data[0].lifecycle_status).toBe("soft_deleted");
+    });
+
+    it("hides semi-deleted keys from admin list", () => {
+      const keys = manager.listKeys({
+        status: "all",
+        sort_by: "created_at",
+        sort_order: "desc",
+        page: 1,
+        page_size: 20,
+      });
+
+      // two-step delete: soft -> semi
+      manager.revokeKey(keys.data[0].id);
+      manager.revokeKey(keys.data[0].id);
+
+      const all = manager.listKeys({
+        status: "all",
+        sort_by: "created_at",
+        sort_order: "desc",
+        page: 1,
+        page_size: 20,
+      });
+      expect(all.data.length).toBe(2);
+    });
+
+    it("filters revoked(alias) after disable", () => {
+      const keys = manager.listKeys({
+        status: "all",
+        sort_by: "created_at",
+        sort_order: "desc",
+        page: 1,
+        page_size: 20,
+      });
+      manager.updateKey(keys.data[0].id, { is_active: false });
 
       const revoked = manager.listKeys({
         status: "revoked",
@@ -260,6 +304,26 @@ describe("ApiKeyManager", () => {
       const result = manager.updateKey("non-existent", { name: "test" });
       expect(result).toBeNull();
     });
+
+    it("can disable an active key via is_active=false", () => {
+      const created = manager.createKey({ name: "toggle-me" }, "admin");
+      const updated = manager.updateKey(created.id, { is_active: false });
+
+      expect(updated).not.toBeNull();
+      expect(updated!.is_active).toBe(false);
+      expect(updated!.revoked_at).toBeTruthy();
+    });
+
+    it("can re-enable a disabled key via is_active=true", () => {
+      const created = manager.createKey({ name: "toggle-back" }, "admin");
+      manager.updateKey(created.id, { is_active: false });
+
+      const updated = manager.updateKey(created.id, { is_active: true });
+
+      expect(updated).not.toBeNull();
+      expect(updated!.is_active).toBe(true);
+      expect(updated!.revoked_at).toBeNull();
+    });
   });
 
   // =====================================================================
@@ -267,22 +331,44 @@ describe("ApiKeyManager", () => {
   // =====================================================================
 
   describe("revokeKey", () => {
-    it("soft-deletes key", () => {
+    it("first delete makes key soft-deleted", () => {
       const created = manager.createKey({ name: "test" }, "admin");
       const revoked = manager.revokeKey(created.id);
       expect(revoked!.is_active).toBe(false);
-      expect(revoked!.revoked_at).toBeDefined();
+      expect(revoked!.soft_deleted_at).toBeDefined();
+      expect(revoked!.lifecycle_status).toBe("soft_deleted");
     });
 
-    it("is idempotent", () => {
+    it("second delete moves key to semi-deleted", () => {
       const created = manager.createKey({ name: "test" }, "admin");
       manager.revokeKey(created.id);
       const revoked2 = manager.revokeKey(created.id);
       expect(revoked2).not.toBeNull();
+      expect(revoked2!.semi_deleted_at).toBeTruthy();
+      expect(revoked2!.lifecycle_status).toBe("semi_deleted");
     });
 
     it("returns null for non-existent key", () => {
       expect(manager.revokeKey("non-existent")).toBeNull();
+    });
+  });
+
+  // =====================================================================
+  // User key visibility after soft delete
+  // =====================================================================
+
+  describe("User key soft delete visibility", () => {
+    it("user soft-deleted key is hidden from user list", () => {
+      const created = manager.createKeyForUser({ name: "u-key" }, 1001, "u1");
+
+      expect(manager.listKeysByUser(1001).length).toBe(1);
+      expect(manager.countActiveKeysByUser(1001)).toBe(1);
+
+      const ok = manager.revokeKeyForUser(created.id, 1001);
+      expect(ok).toBe(true);
+
+      expect(manager.listKeysByUser(1001).length).toBe(0);
+      expect(manager.countActiveKeysByUser(1001)).toBe(0);
     });
   });
 

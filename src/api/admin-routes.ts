@@ -195,7 +195,7 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     return c.json(result);
   });
 
-  // DELETE /api/admin/keys/:id — 吊销 Key (软删除)
+  // DELETE /api/admin/keys/:id — 两段式删除（假删 -> 半真删）
   admin.delete("/keys/:id", (c) => {
     const id = c.req.param("id");
     const adminPrefix = getAdminKeyPrefix(c);
@@ -206,15 +206,20 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "API key not found" }, 404);
     }
 
+    const deletionStage = result.semi_deleted_at
+      ? "semi_deleted"
+      : "soft_deleted";
+
     apiKeyManager.recordAdminAction(
-      "key_revoke",
+      deletionStage === "semi_deleted" ? "key_semi_delete" : "key_soft_delete",
       "api_key",
       id,
       adminPrefix,
       clientIp,
+      { deletion_stage: deletionStage },
     );
 
-    return c.json(result);
+    return c.json({ key: result, deletion_stage: deletionStage });
   });
 
   // POST /api/admin/keys/:id/rotate — 轮转 Key
@@ -225,7 +230,7 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
 
     const result = apiKeyManager.rotateKey(id, adminPrefix);
     if (!result) {
-      return c.json({ error: "API key not found or already revoked" }, 404);
+      return c.json({ error: "API key not found or not rotatable" }, 404);
     }
 
     apiKeyManager.recordAdminAction(
