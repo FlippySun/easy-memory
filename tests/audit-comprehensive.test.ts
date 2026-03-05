@@ -102,6 +102,11 @@ function createForgetDeps(): ForgetHandlerDeps {
   return {
     qdrant: {
       setPayload: vi.fn().mockResolvedValue(undefined),
+      // [FIX D12/C8]: 默认返回 active 状态的 payload
+      getPointPayload: vi.fn().mockResolvedValue({
+        lifecycle: "active",
+        project: "test-project",
+      }),
       ensureCollection: vi.fn().mockResolvedValue("em_test"),
       upsert: vi.fn(),
       search: vi.fn(),

@@ -21,8 +21,22 @@
  * 使用真实 SQLite (tmp) + 真实 AuditService + 真实 AnalyticsService。
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  appendFileSync,
+  readFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -65,7 +79,9 @@ let analyticsDbPath: string;
 // Helpers
 // =========================================================================
 
-function createTestEntry(overrides: Partial<AuditLogEntry> = {}): AuditLogEntry {
+function createTestEntry(
+  overrides: Partial<AuditLogEntry> = {},
+): AuditLogEntry {
   return {
     event_id: randomUUID(),
     timestamp: new Date().toISOString(),
@@ -322,7 +338,9 @@ describe("Suite 1: 完整审计管道 (Full Pipeline)", () => {
       page: 1,
       page_size: 50,
     });
-    const saveEvent = events.data.find((e) => e.http_path === "/api/save" && e.project === "audit-test-proj");
+    const saveEvent = events.data.find(
+      (e) => e.http_path === "/api/save" && e.project === "audit-test-proj",
+    );
     expect(saveEvent).toBeDefined();
     expect(saveEvent!.outcome).toBe("success");
   });
@@ -370,9 +388,7 @@ describe("Suite 1: 完整审计管道 (Full Pipeline)", () => {
       page: 1,
       page_size: 100,
     });
-    const forgetEvent = events.data.find(
-      (e) => e.http_path === "/api/forget",
-    );
+    const forgetEvent = events.data.find((e) => e.http_path === "/api/forget");
     expect(forgetEvent).toBeDefined();
   });
 
@@ -397,7 +413,10 @@ describe("Suite 1: 完整审计管道 (Full Pipeline)", () => {
     });
     // 找到使用 managed key 的请求 — key_prefix 应该是 key_hash 的前 8 chars
     const keyEvent = events.data.find(
-      (e) => e.key_prefix !== "master" && e.key_prefix !== "" && e.http_path === "/api/status",
+      (e) =>
+        e.key_prefix !== "master" &&
+        e.key_prefix !== "" &&
+        e.http_path === "/api/status",
     );
     expect(keyEvent).toBeDefined();
     expect(keyEvent!.key_prefix.length).toBe(8);
@@ -419,9 +438,7 @@ describe("Suite 1: 完整审计管道 (Full Pipeline)", () => {
       page_size: 100,
     });
     // 鉴权失败应该被审计
-    const unauthEvent = events.data.find(
-      (e) => e.outcome === "unauthorized",
-    );
+    const unauthEvent = events.data.find((e) => e.outcome === "unauthorized");
     // 注意: 鉴权中间件在审计中间件之前拦截，所以 401 可能不进审计中间件
     // 这取决于中间件顺序 — bearerAuth 在 audit middleware 前执行
     // 如果 bearerAuth 返回 401 并且审计中间件的 try/finally 未包裹它，则 401 不会被审计
@@ -528,7 +545,11 @@ describe("Suite 2: JSONL 导入管道 (Import Pipeline)", () => {
     expect(result.errors).toBe(2); // 2 corrupted lines
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("JSONL 导入游标检测文件轮转 (P12-FIX)", async () => {
@@ -536,9 +557,10 @@ describe("Suite 2: JSONL 导入管道 (Import Pipeline)", () => {
     const testDbPath = join(tmpDir, "rotation-detect-test.db");
 
     // Phase 1: 写入大文件并导入
-    const bigContent = Array.from({ length: 100 }, () =>
-      JSON.stringify(createTestEntry({ project: "rotation-test" }))
-    ).join("\n") + "\n";
+    const bigContent =
+      Array.from({ length: 100 }, () =>
+        JSON.stringify(createTestEntry({ project: "rotation-test" })),
+      ).join("\n") + "\n";
     writeFileSync(testJsonlPath, bigContent);
 
     const testAnalytics = new AnalyticsService({
@@ -551,7 +573,8 @@ describe("Suite 2: JSONL 导入管道 (Import Pipeline)", () => {
     await testAnalytics.importFromJsonl();
 
     // Phase 2: 模拟轮转 — 用一个更短的文件替换
-    const smallContent = JSON.stringify(createTestEntry({ project: "post-rotation" })) + "\n";
+    const smallContent =
+      JSON.stringify(createTestEntry({ project: "post-rotation" })) + "\n";
     writeFileSync(testJsonlPath, smallContent);
 
     // 导入应检测到轮转（文件长度 < cursor 偏移量）并重置游标
@@ -560,7 +583,11 @@ describe("Suite 2: JSONL 导入管道 (Import Pipeline)", () => {
     expect(result.errors).toBe(0);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("旧格式审计日志 (AUDIT:memory_save) 兼容导入", async () => {
@@ -586,12 +613,20 @@ describe("Suite 2: JSONL 导入管道 (Import Pipeline)", () => {
     const result = await testAnalytics.importFromJsonl();
     expect(result.imported).toBe(1);
 
-    const events = testAnalytics.queryEvents({ range: "24h", page: 1, page_size: 50 });
+    const events = testAnalytics.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 50,
+    });
     expect(events.data[0]!.operation).toBe("memory_save");
     expect(events.data[0]!.project).toBe("legacy-project");
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -614,9 +649,24 @@ describe("Suite 3: 聚合引擎 (Aggregation Engine)", () => {
     // 种植事件数据
     const now = new Date().toISOString();
     testAnalytics.ingestBatch([
-      createTestEntry({ operation: "memory_save", elapsed_ms: 100, outcome: "success", timestamp: now }),
-      createTestEntry({ operation: "memory_save", elapsed_ms: 200, outcome: "success", timestamp: now }),
-      createTestEntry({ operation: "memory_save", elapsed_ms: 300, outcome: "error", timestamp: now }),
+      createTestEntry({
+        operation: "memory_save",
+        elapsed_ms: 100,
+        outcome: "success",
+        timestamp: now,
+      }),
+      createTestEntry({
+        operation: "memory_save",
+        elapsed_ms: 200,
+        outcome: "success",
+        timestamp: now,
+      }),
+      createTestEntry({
+        operation: "memory_save",
+        elapsed_ms: 300,
+        outcome: "error",
+        timestamp: now,
+      }),
       createTestEntry({
         operation: "memory_search",
         elapsed_ms: 50,
@@ -663,7 +713,11 @@ describe("Suite 3: 聚合引擎 (Aggregation Engine)", () => {
     expect(searchRollup!.search_total_count).toBe(2);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("runAggregation() 生成正确的 daily rollup (从 hourly 再聚合)", async () => {
@@ -678,8 +732,16 @@ describe("Suite 3: 聚合引擎 (Aggregation Engine)", () => {
 
     const now = new Date().toISOString();
     testAnalytics.ingestBatch([
-      createTestEntry({ operation: "memory_save", elapsed_ms: 100, timestamp: now }),
-      createTestEntry({ operation: "memory_save", elapsed_ms: 200, timestamp: now }),
+      createTestEntry({
+        operation: "memory_save",
+        elapsed_ms: 100,
+        timestamp: now,
+      }),
+      createTestEntry({
+        operation: "memory_save",
+        elapsed_ms: 200,
+        timestamp: now,
+      }),
     ]);
 
     await testAnalytics.runAggregation();
@@ -696,7 +758,11 @@ describe("Suite 3: 聚合引擎 (Aggregation Engine)", () => {
     expect(dailySave!.total_count).toBe(2);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("多次 runAggregation() 幂等 — INSERT OR REPLACE 不产生重复", async () => {
@@ -729,7 +795,11 @@ describe("Suite 3: 聚合引擎 (Aggregation Engine)", () => {
     expect(saveRollups[0]!.total_count).toBe(1);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("空数据时 runAggregation() 不报错", async () => {
@@ -745,7 +815,11 @@ describe("Suite 3: 聚合引擎 (Aggregation Engine)", () => {
     await expect(testAnalytics.runAggregation()).resolves.not.toThrow();
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -770,7 +844,10 @@ describe("Suite 4: 数据保留策略 (Retention)", () => {
     const currentTimestamp = new Date().toISOString();
     testAnalytics.ingestBatch([
       createTestEntry({ project: "old-event", timestamp: oldTimestamp }),
-      createTestEntry({ project: "current-event", timestamp: currentTimestamp }),
+      createTestEntry({
+        project: "current-event",
+        timestamp: currentTimestamp,
+      }),
     ]);
 
     // 验证两条都存在
@@ -796,7 +873,11 @@ describe("Suite 4: 数据保留策略 (Retention)", () => {
     expect(events.data[0]!.project).toBe("current-event");
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -918,9 +999,13 @@ describe("Suite 5: Admin Analytics API 端到端", () => {
   });
 
   it("GET /api/admin/analytics/timeline → 时间序列 rollup", async () => {
-    const res = await makeRequest(app, "/api/admin/analytics/timeline?granularity=hourly", {
-      token: ADMIN_TOKEN,
-    });
+    const res = await makeRequest(
+      app,
+      "/api/admin/analytics/timeline?granularity=hourly",
+      {
+        token: ADMIN_TOKEN,
+      },
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data).toBeDefined();
@@ -960,9 +1045,13 @@ describe("Suite 6: Admin Audit 查询 API", () => {
   });
 
   it("GET /api/admin/audit/logs → 分页查询审计日志", async () => {
-    const res = await makeRequest(app, "/api/admin/audit/logs?range=24h&page=1&page_size=10", {
-      token: ADMIN_TOKEN,
-    });
+    const res = await makeRequest(
+      app,
+      "/api/admin/audit/logs?range=24h&page=1&page_size=10",
+      {
+        token: ADMIN_TOKEN,
+      },
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data).toBeDefined();
@@ -970,6 +1059,19 @@ describe("Suite 6: Admin Audit 查询 API", () => {
     expect(typeof body.pagination.page).toBe("number");
     expect(typeof body.pagination.total_count).toBe("number");
     expect(typeof body.pagination.total_pages).toBe("number");
+  });
+
+  it("GET /api/admin/audit/logs?page_size=101 → 超过上限返回 400", async () => {
+    const res = await makeRequest(
+      app,
+      "/api/admin/audit/logs?range=24h&page=1&page_size=101",
+      {
+        token: ADMIN_TOKEN,
+      },
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("Invalid query parameters");
   });
 
   it("GET /api/admin/audit/logs?operation=memory_save → 按操作过滤", async () => {
@@ -1329,7 +1431,11 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     expect(result.pagination.total_pages).toBe(0);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("queryEvents 分页正确性", () => {
@@ -1380,7 +1486,11 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     expect(page4.data).toHaveLength(0);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("queryEvents 复合过滤 (key_prefix + project + operation)", () => {
@@ -1392,10 +1502,26 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     testAnalytics.open();
 
     testAnalytics.ingestBatch([
-      createTestEntry({ key_prefix: "aaa_____", project: "p1", operation: "memory_save" }),
-      createTestEntry({ key_prefix: "aaa_____", project: "p1", operation: "memory_search" }),
-      createTestEntry({ key_prefix: "aaa_____", project: "p2", operation: "memory_save" }),
-      createTestEntry({ key_prefix: "bbb_____", project: "p1", operation: "memory_save" }),
+      createTestEntry({
+        key_prefix: "aaa_____",
+        project: "p1",
+        operation: "memory_save",
+      }),
+      createTestEntry({
+        key_prefix: "aaa_____",
+        project: "p1",
+        operation: "memory_search",
+      }),
+      createTestEntry({
+        key_prefix: "aaa_____",
+        project: "p2",
+        operation: "memory_save",
+      }),
+      createTestEntry({
+        key_prefix: "bbb_____",
+        project: "p1",
+        operation: "memory_save",
+      }),
     ]);
 
     const result = testAnalytics.queryEvents({
@@ -1409,7 +1535,11 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     expect(result.data).toHaveLength(1);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("ingestEvent 处理 search_hit boolean → SQLite integer 转换", () => {
@@ -1437,7 +1567,11 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
       }),
     );
 
-    const events = testAnalytics.queryEvents({ range: "24h", page: 1, page_size: 50 });
+    const events = testAnalytics.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 50,
+    });
     const hitEvent = events.data.find((e) => e.top_score === 0.95);
     const missEvent = events.data.find((e) => e.top_score === 0.1);
 
@@ -1446,7 +1580,11 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     expect(missEvent!.search_hit).toBe(false);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("db 未 open 时所有查询方法返回安全默认值", () => {
@@ -1459,13 +1597,26 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     expect(notOpenedAnalytics.isReady).toBe(false);
     expect(notOpenedAnalytics.ingestEvent(createTestEntry())).toBe(false);
     expect(notOpenedAnalytics.ingestBatch([createTestEntry()])).toBe(0);
-    expect(notOpenedAnalytics.queryEvents({ range: "24h", page: 1, page_size: 50 }).data).toHaveLength(0);
-    expect(notOpenedAnalytics.queryRollups({ range: "24h", granularity: "hourly" })).toHaveLength(0);
-    expect(notOpenedAnalytics.getHitRate({ range: "24h" }).total_searches).toBe(0);
+    expect(
+      notOpenedAnalytics.queryEvents({ range: "24h", page: 1, page_size: 50 })
+        .data,
+    ).toHaveLength(0);
+    expect(
+      notOpenedAnalytics.queryRollups({ range: "24h", granularity: "hourly" }),
+    ).toHaveLength(0);
+    expect(notOpenedAnalytics.getHitRate({ range: "24h" }).total_searches).toBe(
+      0,
+    );
     expect(notOpenedAnalytics.getUserUsage({ range: "24h" })).toHaveLength(0);
-    expect(notOpenedAnalytics.getProjectUsage({ range: "24h" })).toHaveLength(0);
-    expect(notOpenedAnalytics.getErrorRate({ range: "24h" }).total_requests).toBe(0);
-    expect(notOpenedAnalytics.exportEvents({ range: "24h", page: 1, page_size: 50 })).toHaveLength(0);
+    expect(notOpenedAnalytics.getProjectUsage({ range: "24h" })).toHaveLength(
+      0,
+    );
+    expect(
+      notOpenedAnalytics.getErrorRate({ range: "24h" }).total_requests,
+    ).toBe(0);
+    expect(
+      notOpenedAnalytics.exportEvents({ range: "24h", page: 1, page_size: 50 }),
+    ).toHaveLength(0);
   });
 
   it("duplicate event_id → INSERT OR IGNORE 不报错", () => {
@@ -1480,11 +1631,19 @@ describe("Suite 11: AnalyticsService 查询边界", () => {
     expect(testAnalytics.ingestEvent(entry)).toBe(true);
     expect(testAnalytics.ingestEvent(entry)).toBe(true); // 重复 ID 不报错
 
-    const events = testAnalytics.queryEvents({ range: "24h", page: 1, page_size: 50 });
+    const events = testAnalytics.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 50,
+    });
     expect(events.data).toHaveLength(1); // 只有一条
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -1634,7 +1793,11 @@ describe("Suite 13: 并发安全 (Concurrency Safety)", () => {
     expect(events.data).toHaveLength(100);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("并发 flush 不重复写入 (AuditService)", async () => {
@@ -1675,9 +1838,7 @@ describe("Suite 13: 并发安全 (Concurrency Safety)", () => {
 
     // 边写边查
     for (let i = 0; i < 50; i++) {
-      testAnalytics.ingestEvent(
-        createTestEntry({ project: `wal-test-${i}` }),
-      );
+      testAnalytics.ingestEvent(createTestEntry({ project: `wal-test-${i}` }));
       // 每 10 次查询一次
       if (i % 10 === 0) {
         const events = testAnalytics.queryEvents({
@@ -1697,7 +1858,11 @@ describe("Suite 13: 并发安全 (Concurrency Safety)", () => {
     expect(finalEvents.data).toHaveLength(50);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -1754,15 +1919,27 @@ describe("Suite 15: 审计中间件路径/状态映射", () => {
     });
 
     // 验证各路径的 operation 映射
-    const saveEvents = events.data.filter((e) => e.http_path === "/api/save" && e.project === "map-proj");
-    const searchEvents = events.data.filter((e) => e.http_path === "/api/search" && e.project === "map-proj");
-    const forgetEvents = events.data.filter((e) => e.http_path === "/api/forget");
-    const statusEvents = events.data.filter((e) => e.http_path === "/api/status");
+    const saveEvents = events.data.filter(
+      (e) => e.http_path === "/api/save" && e.project === "map-proj",
+    );
+    const searchEvents = events.data.filter(
+      (e) => e.http_path === "/api/search" && e.project === "map-proj",
+    );
+    const forgetEvents = events.data.filter(
+      (e) => e.http_path === "/api/forget",
+    );
+    const statusEvents = events.data.filter(
+      (e) => e.http_path === "/api/status",
+    );
 
-    if (saveEvents.length > 0) expect(saveEvents[0]!.operation).toBe("memory_save");
-    if (searchEvents.length > 0) expect(searchEvents[0]!.operation).toBe("memory_search");
-    if (forgetEvents.length > 0) expect(forgetEvents[0]!.operation).toBe("memory_forget");
-    if (statusEvents.length > 0) expect(statusEvents[0]!.operation).toBe("memory_status");
+    if (saveEvents.length > 0)
+      expect(saveEvents[0]!.operation).toBe("memory_save");
+    if (searchEvents.length > 0)
+      expect(searchEvents[0]!.operation).toBe("memory_search");
+    if (forgetEvents.length > 0)
+      expect(forgetEvents[0]!.operation).toBe("memory_forget");
+    if (statusEvents.length > 0)
+      expect(statusEvents[0]!.operation).toBe("memory_status");
   });
 
   it("200 → success, 400 → rejected, 401 → unauthorized, 429 → rate_limited, 500 → error", async () => {
@@ -1820,7 +1997,11 @@ describe("Suite 16: 批量写入与大数据量", () => {
     expect(events.pagination.total_count).toBe(1000);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("exportEvents 限制最大导出数量 (≤10000)", () => {
@@ -1844,7 +2025,11 @@ describe("Suite 16: 批量写入与大数据量", () => {
     expect(exported.length).toBeLessThanOrEqual(5);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -1863,10 +2048,30 @@ describe("Suite 17: Hit Rate 详细验证", () => {
 
     // 4 次搜索：3 次 hit, 1 次 miss
     testAnalytics.ingestBatch([
-      createTestEntry({ operation: "memory_search", search_hit: true, top_score: 0.9, result_count: 5 }),
-      createTestEntry({ operation: "memory_search", search_hit: true, top_score: 0.8, result_count: 3 }),
-      createTestEntry({ operation: "memory_search", search_hit: true, top_score: 0.7, result_count: 2 }),
-      createTestEntry({ operation: "memory_search", search_hit: false, top_score: 0.1, result_count: 0 }),
+      createTestEntry({
+        operation: "memory_search",
+        search_hit: true,
+        top_score: 0.9,
+        result_count: 5,
+      }),
+      createTestEntry({
+        operation: "memory_search",
+        search_hit: true,
+        top_score: 0.8,
+        result_count: 3,
+      }),
+      createTestEntry({
+        operation: "memory_search",
+        search_hit: true,
+        top_score: 0.7,
+        result_count: 2,
+      }),
+      createTestEntry({
+        operation: "memory_search",
+        search_hit: false,
+        top_score: 0.1,
+        result_count: 0,
+      }),
     ]);
 
     const metrics = testAnalytics.getHitRate({ range: "24h" });
@@ -1877,7 +2082,11 @@ describe("Suite 17: Hit Rate 详细验证", () => {
     expect(metrics.avg_result_count).toBeCloseTo((5 + 3 + 2 + 0) / 4, 4);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("按 project 过滤 hit rate", () => {
@@ -1889,9 +2098,21 @@ describe("Suite 17: Hit Rate 详细验证", () => {
     testAnalytics.open();
 
     testAnalytics.ingestBatch([
-      createTestEntry({ operation: "memory_search", project: "p1", search_hit: true }),
-      createTestEntry({ operation: "memory_search", project: "p1", search_hit: true }),
-      createTestEntry({ operation: "memory_search", project: "p2", search_hit: false }),
+      createTestEntry({
+        operation: "memory_search",
+        project: "p1",
+        search_hit: true,
+      }),
+      createTestEntry({
+        operation: "memory_search",
+        project: "p1",
+        search_hit: true,
+      }),
+      createTestEntry({
+        operation: "memory_search",
+        project: "p2",
+        search_hit: false,
+      }),
     ]);
 
     const p1 = testAnalytics.getHitRate({ range: "24h", project: "p1" });
@@ -1903,7 +2124,11 @@ describe("Suite 17: Hit Rate 详细验证", () => {
     expect(p2.hit_rate).toBe(0);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("非 search 操作不计入 hit rate", () => {
@@ -1925,7 +2150,11 @@ describe("Suite 17: Hit Rate 详细验证", () => {
     expect(metrics.hit_rate).toBe(0);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -1966,7 +2195,11 @@ describe("Suite 18: Error Rate 详细验证", () => {
     expect(metrics.by_operation["memory_search"]!.total).toBe(2);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
@@ -1984,10 +2217,26 @@ describe("Suite 19: User/Project Usage 详细验证", () => {
     testAnalytics.open();
 
     testAnalytics.ingestBatch([
-      createTestEntry({ key_prefix: "usr1____", operation: "memory_save", project: "p1" }),
-      createTestEntry({ key_prefix: "usr1____", operation: "memory_search", project: "p1" }),
-      createTestEntry({ key_prefix: "usr1____", operation: "memory_search", project: "p2" }),
-      createTestEntry({ key_prefix: "usr2____", operation: "memory_save", outcome: "error" }),
+      createTestEntry({
+        key_prefix: "usr1____",
+        operation: "memory_save",
+        project: "p1",
+      }),
+      createTestEntry({
+        key_prefix: "usr1____",
+        operation: "memory_search",
+        project: "p1",
+      }),
+      createTestEntry({
+        key_prefix: "usr1____",
+        operation: "memory_search",
+        project: "p2",
+      }),
+      createTestEntry({
+        key_prefix: "usr2____",
+        operation: "memory_save",
+        outcome: "error",
+      }),
     ]);
 
     const usage = testAnalytics.getUserUsage({ range: "24h" });
@@ -2006,7 +2255,11 @@ describe("Suite 19: User/Project Usage 详细验证", () => {
     expect(usr2!.error_count).toBe(1);
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 
   it("getProjectUsage 按项目正确聚合 (含 hit_rate)", () => {
@@ -2018,10 +2271,28 @@ describe("Suite 19: User/Project Usage 详细验证", () => {
     testAnalytics.open();
 
     testAnalytics.ingestBatch([
-      createTestEntry({ project: "px", key_prefix: "u1", operation: "memory_save" }),
-      createTestEntry({ project: "px", key_prefix: "u2", operation: "memory_search", search_hit: true }),
-      createTestEntry({ project: "px", key_prefix: "u2", operation: "memory_search", search_hit: false }),
-      createTestEntry({ project: "py", key_prefix: "u1", operation: "memory_save" }),
+      createTestEntry({
+        project: "px",
+        key_prefix: "u1",
+        operation: "memory_save",
+      }),
+      createTestEntry({
+        project: "px",
+        key_prefix: "u2",
+        operation: "memory_search",
+        search_hit: true,
+      }),
+      createTestEntry({
+        project: "px",
+        key_prefix: "u2",
+        operation: "memory_search",
+        search_hit: false,
+      }),
+      createTestEntry({
+        project: "py",
+        key_prefix: "u1",
+        operation: "memory_save",
+      }),
     ]);
 
     const usage = testAnalytics.getProjectUsage({ range: "24h" });
@@ -2034,7 +2305,11 @@ describe("Suite 19: User/Project Usage 详细验证", () => {
     expect(px!.search_hit_rate).toBeCloseTo(0.5, 4); // 1 hit / 2 searches
 
     testAnalytics.close();
-    try { rmSync(testDbPath); rmSync(`${testDbPath}-wal`); rmSync(`${testDbPath}-shm`); } catch {}
+    try {
+      rmSync(testDbPath);
+      rmSync(`${testDbPath}-wal`);
+      rmSync(`${testDbPath}-shm`);
+    } catch {}
   });
 });
 
