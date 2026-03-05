@@ -189,17 +189,37 @@ export const authApi = {
 // =====================================================================
 
 export interface ApiKeyRecord {
-  id: number;
+  id: string;
   name: string;
-  key_hash: string;
   prefix: string;
-  scopes: string;
-  rate_limit_per_minute: number;
-  is_active: number;
+  scopes: string[];
+  rate_limit_per_minute: number | null;
+  is_active: boolean;
+  revoked_at: string | null;
+  soft_deleted_at: string | null;
+  semi_deleted_at: string | null;
+  lifecycle_status:
+    | "active"
+    | "disabled"
+    | "soft_deleted"
+    | "semi_deleted"
+    | "expired";
   created_at: string;
   last_used_at: string | null;
   expires_at: string | null;
   total_requests: number;
+}
+
+export interface ApiKeyCreateResponse extends ApiKeyRecord {
+  /** 新版后端字段 */
+  key?: string;
+  /** 兼容旧版字段 */
+  raw_key?: string;
+}
+
+export interface ApiKeyDeleteResponse {
+  key: ApiKeyRecord;
+  deletion_stage: "soft_deleted" | "semi_deleted";
 }
 
 export interface BanRecord {
@@ -223,18 +243,18 @@ export const adminApi = {
     scopes?: string;
     rate_limit_per_minute?: number;
     expires_in_days?: number;
-  }) => api.post<{ key: ApiKeyRecord; raw_key: string }>("/admin/keys", data),
+  }) => api.post<ApiKeyCreateResponse>("/admin/keys", data),
   updateKey: (
-    id: number,
+    id: string,
     data: {
       name?: string;
-      scopes?: string;
+      scopes?: string[];
       rate_limit_per_minute?: number;
       is_active?: boolean;
     },
-  ) => api.patch<{ key: ApiKeyRecord }>(`/admin/keys/${id}`, data),
-  deleteKey: (id: number) =>
-    api.delete<{ success: boolean }>(`/admin/keys/${id}`),
+  ) => api.patch<ApiKeyRecord>(`/admin/keys/${id}`, data),
+  deleteKey: (id: string) =>
+    api.delete<ApiKeyDeleteResponse>(`/admin/keys/${id}`),
 
   // Bans
   listBans: () =>

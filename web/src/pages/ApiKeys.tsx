@@ -29,25 +29,28 @@ export function ApiKeysPage() {
   const [newKeyResult, setNewKeyResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
   } | null>(null);
 
-  const fetchKeys = useCallback(async () => {
+  const fetchKeys = useCallback(async (options?: { silent?: boolean }) => {
     try {
       const res = await adminApi.listKeys();
       setKeys(res.data ?? []);
     } catch {
-      setToast({ message: "Failed to load API keys", type: "error" });
+      if (!options?.silent) {
+        setToast({ message: "Failed to load API keys", type: "error" });
+      }
+      throw new Error("Failed to load API keys");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchKeys();
+    fetchKeys().catch(() => undefined);
   }, [fetchKeys]);
 
   const handleCreate = async () => {
@@ -55,10 +58,26 @@ export function ApiKeysPage() {
     setCreating(true);
     try {
       const res = await adminApi.createKey({ name: newKeyName });
-      setNewKeyResult(res.raw_key);
+      const createdKey = res.key ?? res.raw_key;
+      if (!createdKey) {
+        throw new Error("API key payload missing from create response");
+      }
+      setNewKeyResult(createdKey);
       setNewKeyName("");
-      await fetchKeys();
-      setToast({ message: "API key created", type: "success" });
+
+      let refreshOk = true;
+      try {
+        await fetchKeys({ silent: true });
+      } catch {
+        refreshOk = false;
+      }
+
+      setToast({
+        message: refreshOk
+          ? "API key created"
+          : "API key created, but list refresh failed",
+        type: refreshOk ? "success" : "error",
+      });
     } catch (err) {
       setToast({
         message: err instanceof Error ? err.message : "Failed to create key",
@@ -70,14 +89,37 @@ export function ApiKeysPage() {
   };
 
   const handleToggle = async (key: ApiKeyRecord) => {
+    if (key.lifecycle_status === "soft_deleted") return;
     if (actionLoading !== null) return;
     setActionLoading(key.id);
     try {
       await adminApi.updateKey(key.id, { is_active: !key.is_active });
-      await fetchKeys();
+
+      setKeys((prev) =>
+        prev.map((k) =>
+          k.id === key.id
+            ? {
+                ...k,
+                is_active: !k.is_active,
+                revoked_at: k.is_active ? new Date().toISOString() : null,
+                lifecycle_status: k.is_active ? "disabled" : "active",
+              }
+            : k,
+        ),
+      );
+
+      let refreshOk = true;
+      try {
+        await fetchKeys({ silent: true });
+      } catch {
+        refreshOk = false;
+      }
+
       setToast({
-        message: `Key ${key.is_active ? "disabled" : "enabled"}`,
-        type: "success",
+        message: refreshOk
+          ? `Key ${key.is_active ? "disabled" : "enabled"}`
+          : `Key ${key.is_active ? "disabled" : "enabled"}, but refresh failed`,
+        type: refreshOk ? "success" : "error",
       });
     } catch {
       setToast({ message: "Failed to update key", type: "error" });
@@ -87,19 +129,73 @@ export function ApiKeysPage() {
   };
 
   const handleDelete = async (key: ApiKeyRecord) => {
-    if (!confirm(`Delete key "${key.name}"?`)) return;
+    const isSecondStage = key.lifecycle_status === "soft_deleted";
+    const confirmed = confirm(
+      isSecondStage
+        ? `Permanently hide key "${key.name}" from Admin UI? It will be physically purged after 30 days.`
+        : `Soft-delete key "${key.name}"? It will disappear from My API Keys and user APIs, but remain visible to Admin.`,
+    );
+    if (!confirmed) return;
     if (actionLoading !== null) return;
     setActionLoading(key.id);
     try {
-      await adminApi.deleteKey(key.id);
-      // Optimistic removal — immediately remove from UI, then refetch
-      setKeys((prev) => prev.filter((k) => k.id !== key.id));
-      await fetchKeys();
-      setToast({ message: "Key deleted", type: "success" });
+      const res = await adminApi.deleteKey(key.id);
+
+      if (res.deletion_stage === "semi_deleted") {
+        setKeys((prev) => prev.filter((k) => k.id !== key.id));
+      } else {
+        setKeys((prev) =>
+          prev.map((k) =>
+            k.id === key.id
+              ? {
+                  ...k,
+                  is_active: false,
+                  soft_deleted_at:
+                    res.key.soft_deleted_at ?? new Date().toISOString(),
+                  lifecycle_status: "soft_deleted",
+                }
+              : k,
+          ),
+        );
+      }
+
+      let refreshOk = true;
+      try {
+        await fetchKeys({ silent: true });
+      } catch {
+        refreshOk = false;
+      }
+
+      const actionMsg =
+        res.deletion_stage === "semi_deleted"
+          ? "Key semi-deleted (hidden from Admin UI, purge in 30 days)"
+          : "Key soft-deleted";
+
+      setToast({
+        message: refreshOk
+          ? actionMsg
+          : `${actionMsg}, but list refresh failed`,
+        type: refreshOk ? "success" : "error",
+      });
     } catch {
       setToast({ message: "Failed to delete key", type: "error" });
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const getStatusBadge = (key: ApiKeyRecord) => {
+    switch (key.lifecycle_status) {
+      case "active":
+        return <Badge variant="success">Active</Badge>;
+      case "disabled":
+        return <Badge variant="warning">Disabled</Badge>;
+      case "soft_deleted":
+        return <Badge variant="info">Soft Deleted</Badge>;
+      case "expired":
+        return <Badge variant="default">Expired</Badge>;
+      default:
+        return <Badge variant="default">Unknown</Badge>;
     }
   };
 
@@ -169,16 +265,15 @@ export function ApiKeysPage() {
               {
                 key: "status",
                 title: "Status",
-                render: (r) => (
-                  <Badge variant={r.is_active ? "success" : "danger"}>
-                    {r.is_active ? "Active" : "Disabled"}
-                  </Badge>
-                ),
+                render: (r) => getStatusBadge(r),
               },
               {
                 key: "rate_limit_per_minute",
                 title: "Rate Limit",
-                render: (r) => `${r.rate_limit_per_minute}/min`,
+                render: (r) =>
+                  r.rate_limit_per_minute
+                    ? `${r.rate_limit_per_minute}/min`
+                    : "Default",
               },
               {
                 key: "total_requests",
@@ -199,49 +294,63 @@ export function ApiKeysPage() {
                 className: "text-right",
                 render: (r) => {
                   const isLoading = actionLoading === r.id;
+                  const canToggle =
+                    r.lifecycle_status === "active" ||
+                    r.lifecycle_status === "disabled";
                   return (
                     <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => handleToggle(r)}
-                        disabled={isLoading}
-                        className={`p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                          r.is_active
-                            ? "text-emerald-500 hover:text-amber-600 hover:bg-amber-50"
-                            : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
-                        }`}
-                        title={r.is_active ? "Disable" : "Enable"}
-                      >
-                        {isLoading ? (
-                          <svg
-                            className="animate-spin w-5 h-5"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                          >
-                            <circle
-                              className="opacity-25"
-                              cx="12"
-                              cy="12"
-                              r="10"
-                              stroke="currentColor"
-                              strokeWidth="4"
+                      {canToggle ? (
+                        <button
+                          onClick={() => handleToggle(r)}
+                          disabled={isLoading}
+                          className={`p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                            r.is_active
+                              ? "text-emerald-500 hover:text-amber-600 hover:bg-amber-50"
+                              : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
+                          }`}
+                          title={r.is_active ? "Disable" : "Enable"}
+                        >
+                          {isLoading ? (
+                            <svg
+                              className="animate-spin w-5 h-5"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                              />
+                            </svg>
+                          ) : r.is_active ? (
+                            <ToggleRight
+                              size={22}
+                              className="text-emerald-500"
                             />
-                            <path
-                              className="opacity-75"
-                              fill="currentColor"
-                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                            />
-                          </svg>
-                        ) : r.is_active ? (
-                          <ToggleRight size={22} className="text-emerald-500" />
-                        ) : (
-                          <ToggleLeft size={22} className="text-slate-400" />
-                        )}
-                      </button>
+                          ) : (
+                            <ToggleLeft size={22} className="text-slate-400" />
+                          )}
+                        </button>
+                      ) : (
+                        <div className="w-8 h-8" />
+                      )}
                       <button
                         onClick={() => handleDelete(r)}
                         disabled={isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Delete"
+                        title={
+                          r.lifecycle_status === "soft_deleted"
+                            ? "Semi Delete"
+                            : "Soft Delete"
+                        }
                       >
                         <Trash2 size={18} />
                       </button>

@@ -25,21 +25,26 @@ export default function MyKeys() {
   const [copied, setCopied] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const loadKeys = useCallback(async () => {
+  const loadKeys = useCallback(async (options?: { silent?: boolean }) => {
     try {
       const res = await userKeysApi.list();
       setKeys(res.keys);
       setMaxKeys(res.max_keys);
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load API keys");
+      if (!options?.silent) {
+        setError(
+          err instanceof Error ? err.message : "Failed to load API keys",
+        );
+      }
+      throw err;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadKeys();
+    loadKeys().catch(() => undefined);
   }, [loadKeys]);
 
   const handleCreate = async () => {
@@ -51,7 +56,17 @@ export default function MyKeys() {
       setCreatedKey(res);
       setNewKeyName("");
       setShowCreate(false);
-      await loadKeys();
+
+      let refreshOk = true;
+      try {
+        await loadKeys({ silent: true });
+      } catch {
+        refreshOk = false;
+      }
+
+      if (!refreshOk) {
+        setError("Key created, but failed to refresh key list.");
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to create key";
       if (msg.includes("max:") || msg.includes("409")) {
@@ -67,9 +82,10 @@ export default function MyKeys() {
   };
 
   const handleRevoke = async (id: string) => {
+    if (actionLoading !== null) return;
     if (
       !confirm(
-        "Are you sure you want to revoke this API key? This cannot be undone.",
+        "Delete this API key from your list? You won't be able to recover it from My API Keys.",
       )
     ) {
       return;
@@ -77,10 +93,24 @@ export default function MyKeys() {
     setActionLoading(id);
     try {
       await userKeysApi.revoke(id);
+
+      // 假删除后，用户侧列表应立即不可见
+      setKeys((prev) => prev.filter((k) => k.id !== id));
+
       setCreatedKey(null);
-      await loadKeys();
+
+      let refreshOk = true;
+      try {
+        await loadKeys({ silent: true });
+      } catch {
+        refreshOk = false;
+      }
+
+      if (!refreshOk) {
+        setError("Key deleted from your list, but refresh failed.");
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to revoke key");
+      setError(err instanceof Error ? err.message : "Failed to delete key");
     } finally {
       setActionLoading(null);
     }
@@ -141,7 +171,7 @@ export default function MyKeys() {
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
           <span>{error}</span>
         </div>
       )}
@@ -201,7 +231,7 @@ export default function MyKeys() {
               </code>
               <button
                 onClick={() => copyToClipboard(createdKey.key, "key")}
-                className="ml-2 p-1.5 rounded hover:bg-slate-100 flex-shrink-0"
+                className="ml-2 p-1.5 rounded hover:bg-slate-100 shrink-0"
                 title="Copy API Key"
               >
                 {copied === "key" ? (
