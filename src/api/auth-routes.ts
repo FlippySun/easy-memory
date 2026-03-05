@@ -293,7 +293,17 @@ function jwtAuth(authService: AuthService, adminToken: string) {
             401,
           );
         }
+
+        // RBAC-FIX: 权限判定以数据库当前角色为准，避免角色降级后旧 JWT claim 继续越权
+        c.set("jwtPayload", {
+          ...payload,
+          role: user.role,
+          username: user.username,
+        });
+        await next();
+        return;
       }
+
       c.set("jwtPayload", payload);
       await next();
       return;

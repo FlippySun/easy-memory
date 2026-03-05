@@ -3,13 +3,14 @@
  * @description Admin 认证中间件单元测试。
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import {
   adminAuth,
   getAdminKeyPrefix,
   getClientIp,
 } from "../../src/api/admin-auth.js";
+import type { AuthService } from "../../src/services/auth.js";
 
 function createTestApp(adminToken: string) {
   const app = new Hono();
@@ -70,6 +71,37 @@ describe("adminAuth middleware", () => {
       headers: { Authorization: "bearer secret-admin-token" },
     });
     expect(res.status).toBe(200);
+  });
+
+  it("rejects stale admin JWT when user has been downgraded", async () => {
+    const mockAuthService = {
+      verifyToken: vi.fn().mockReturnValue({
+        sub: 42,
+        role: "admin",
+        username: "downgraded-user",
+        iat: 1,
+        exp: 9999999999,
+      }),
+      getUserById: vi.fn().mockReturnValue({
+        id: 42,
+        username: "downgraded-user",
+        role: "user",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        last_login_at: null,
+        is_active: true,
+      }),
+    } as unknown as AuthService;
+
+    const app = new Hono();
+    app.use("/admin/*", adminAuth("secret-admin-token", mockAuthService));
+    app.get("/admin/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/admin/test", {
+      headers: { Authorization: "Bearer stale-jwt-token" },
+    });
+
+    expect(res.status).toBe(401);
   });
 });
 

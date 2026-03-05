@@ -104,9 +104,9 @@ export function adminAuth(adminToken: string, authService?: AuthService) {
     // 尝试认证 — Cookie 路径 (JWT only, ADMIN_TOKEN 不通过 cookie 传递)
     if (cookieToken && authService) {
       const payload = authService.verifyToken(cookieToken);
-      if (payload && payload.role === "admin") {
+      if (payload) {
         const user = authService.getUserById(payload.sub);
-        if (user && user.is_active) {
+        if (user && user.is_active && user.role === "admin") {
           await next();
           return;
         }
@@ -124,9 +124,9 @@ export function adminAuth(adminToken: string, authService?: AuthService) {
       // Path 2: JWT — 验证签名 + 过期 + admin 角色 (C2 FIX)
       if (authService) {
         const payload = authService.verifyToken(headerToken);
-        if (payload && payload.role === "admin") {
+        if (payload) {
           const user = authService.getUserById(payload.sub);
-          if (user && user.is_active) {
+          if (user && user.is_active && user.role === "admin") {
             await next();
             return;
           }

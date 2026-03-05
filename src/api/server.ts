@@ -199,7 +199,8 @@ function createApp(container: AppContainer): Hono<Env> {
         401,
       );
     }
-    if (container.banManager.isKeyBanned(validation.id)) {
+    const keyBan = container.banManager.isKeyBanned(validation.id);
+    if (keyBan.banned) {
       return c.json(
         {
           jsonrpc: "2.0",
@@ -217,7 +218,15 @@ function createApp(container: AppContainer): Hono<Env> {
       name: "easy-memory",
       version: "0.6.0",
     });
-    registerTools(mcpServer, container);
+    registerTools(mcpServer, container, {
+      auditContext: {
+        keyPrefix: validation.prefix || validation.key_hash.slice(0, 8),
+        clientIp: getClientIp(c, config.trustProxy),
+        userAgent: c.req.header("User-Agent") ?? "",
+        httpMethod: c.req.method,
+        httpPath: "/mcp",
+      },
+    });
     await mcpServer.connect(transport);
 
     // 3. 委托 transport 处理 HTTP 请求
