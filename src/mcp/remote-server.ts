@@ -71,6 +71,39 @@ async function remoteCall(
   }
 }
 
+type RemoteForgetArgs = {
+  id?: string;
+  memory_id?: string;
+  action?: "archive" | "outdated" | "delete";
+  reason?: string;
+  project?: string;
+};
+
+/**
+ * 将 memory_forget 参数标准化为远端 /api/forget 所需格式。
+ *
+ * 兼容输入：
+ * - 新格式: { id, action, reason, project }
+ * - 旧格式: { memory_id, project }
+ */
+function buildForgetPayload(args: RemoteForgetArgs): {
+  id: string;
+  action: "archive" | "outdated" | "delete";
+  reason: string;
+  project?: string;
+} {
+  const id = args.id ?? args.memory_id ?? "";
+  const action = args.action ?? "archive";
+  const reason = args.reason?.trim() || "Archived via remote proxy";
+
+  return {
+    id,
+    action,
+    reason,
+    ...(args.project ? { project: args.project } : {}),
+  };
+}
+
 /**
  * 创建远程代理模式的 MCP Server。
  *
@@ -187,19 +220,32 @@ export async function createRemoteMcpServer(
   // ===== memory_forget — 遗忘/归档记忆 =====
   server.tool(
     "memory_forget",
-    "Archive (soft-delete) a specific memory by its ID.",
+    "Archive (soft-delete) or mark a memory as outdated. Supports both id and legacy memory_id.",
     {
-      memory_id: z.string().describe("The ID of the memory to forget."),
+      id: z.string().optional().describe("Memory UUID to forget (preferred)."),
+      memory_id: z
+        .string()
+        .optional()
+        .describe("Legacy memory ID field (backward compatibility)."),
+      action: z
+        .enum(["archive", "outdated", "delete"])
+        .optional()
+        .describe("Forget action (default: archive)."),
+      reason: z
+        .string()
+        .optional()
+        .describe("Reason for forgetting (default provided if omitted)."),
       project: z.string().optional().describe("Project the memory belongs to."),
     },
     async (args) => {
       try {
+        const payload = buildForgetPayload(args as RemoteForgetArgs);
         const result = await remoteCall(
           baseUrl,
           token,
           "POST",
           "/api/forget",
-          args,
+          payload,
         );
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],

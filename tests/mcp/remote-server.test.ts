@@ -1,0 +1,131 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type ToolResponse = {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+};
+
+type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResponse>;
+
+const toolHandlers = new Map<string, ToolHandler>();
+const connectMock = vi.fn().mockResolvedValue(undefined);
+const closeMock = vi.fn().mockResolvedValue(undefined);
+
+vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => {
+  class MockMcpServer {
+    constructor(_meta: unknown) {}
+
+    tool(
+      name: string,
+      _description: string,
+      _schema: unknown,
+      handler: ToolHandler,
+    ) {
+      toolHandlers.set(name, handler);
+    }
+
+    connect = connectMock;
+    close = closeMock;
+  }
+
+  return { McpServer: MockMcpServer };
+});
+
+vi.mock("../../src/utils/logger.js", () => ({
+  log: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("../../src/utils/shutdown.js", () => ({
+  setupGracefulShutdown: vi.fn(),
+}));
+
+vi.mock("../../src/transport/SafeStdioTransport.js", () => ({
+  SafeStdioTransport: class {},
+}));
+
+describe("createRemoteMcpServer memory_forget mapping", () => {
+  beforeEach(() => {
+    toolHandlers.clear();
+    connectMock.mockClear();
+    closeMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("should send id/action/reason payload to /api/forget", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: "archived" }),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createRemoteMcpServer } =
+      await import("../../src/mcp/remote-server.js");
+
+    await createRemoteMcpServer("em_test_key", "https://memory.example.com");
+
+    const forgetHandler = toolHandlers.get("memory_forget");
+    expect(forgetHandler).toBeDefined();
+
+    const res = await forgetHandler!({
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      action: "outdated",
+      reason: "superseded",
+      project: "demo",
+    });
+
+    expect(res.isError).toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, { body?: string }];
+    expect(url).toBe("https://memory.example.com/api/forget");
+
+    const body = JSON.parse(init.body ?? "{}");
+    expect(body).toEqual({
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      action: "outdated",
+      reason: "superseded",
+      project: "demo",
+    });
+  });
+
+  it("should support legacy memory_id by mapping it to id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: "archived" }),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createRemoteMcpServer } =
+      await import("../../src/mcp/remote-server.js");
+
+    await createRemoteMcpServer("em_test_key", "https://memory.example.com");
+
+    const forgetHandler = toolHandlers.get("memory_forget");
+    expect(forgetHandler).toBeDefined();
+
+    const res = await forgetHandler!({
+      memory_id: "550e8400-e29b-41d4-a716-446655440001",
+      project: "legacy",
+    });
+
+    expect(res.isError).toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, { body?: string }];
+    expect(url).toBe("https://memory.example.com/api/forget");
+
+    const body = JSON.parse(init.body ?? "{}");
+    expect(body.id).toBe("550e8400-e29b-41d4-a716-446655440001");
+    expect(body.action).toBe("archive");
+    expect(typeof body.reason).toBe("string");
+    expect(body.reason.length).toBeGreaterThan(0);
+    expect(body.project).toBe("legacy");
+  });
+});
