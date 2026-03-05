@@ -19,6 +19,7 @@ Easy Memory 提供双 Shell 架构：
 
 - [快速开始](#快速开始)
 - [客户端配置](#客户端配置)
+- [30 秒排障（远端优先）](#30-秒排障远端优先)
 - [HTTP API](#http-api)
 - [MCP Tools](#mcp-tools)
 - [Docker 部署](#docker-部署)
@@ -29,6 +30,18 @@ Easy Memory 提供双 Shell 架构：
 ---
 
 ## 快速开始
+
+### 推荐路径（远端 VPS 优先，约 30 秒）
+
+如果你已有远端 Easy Memory 服务（例如 `https://memory.zhiz.chat`）和 API Key（`em_...`），建议优先使用 **stdio 远程代理模式**：
+
+1. 在客户端 MCP 配置里使用 `npx easy-memory@latest` + `EASY_MEMORY_URL` + `EASY_MEMORY_TOKEN`
+2. 执行 **Reload Window / 重启客户端**
+3. 运行 `MCP: List Servers`（或客户端等效命令）确认 server 已连接
+
+> 根键速记：VS Code 的 `.vscode/mcp.json` 用 `servers`；Claude Desktop / Cursor 常见 `mcpServers`。
+
+> 只有在你没有远端服务时，再走下方“本地自托管（Qdrant + Ollama）”路径。
 
 ### 前置条件
 
@@ -129,6 +142,13 @@ EASY_MEMORY_MODE=http HTTP_AUTH_TOKEN=your-token node dist/index.js
 
 ## 客户端配置
 
+### mcp.json 根键速查（避免“工具列表为空”）
+
+| 客户端                   | MCP 配置根键 |
+| ------------------------ | ------------ |
+| VS Code (GitHub Copilot) | `servers`    |
+| Claude Desktop / Cursor  | `mcpServers` |
+
 ### Claude Desktop
 
 编辑 `~/Library/Application Support/Claude/claude_desktop_config.json`：
@@ -217,11 +237,21 @@ EASY_MEMORY_MODE=http HTTP_AUTH_TOKEN=your-token node dist/index.js
 - `EASY_MEMORY_TOKEN` — 远端 API Key（从 Admin 面板获取）
 - `EASY_MEMORY_URL` — 远端服务地址
 
-### MCP Streamable HTTP 模式（直连远端）
+### MCP Streamable HTTP 模式（直连远端，进阶）
+
+> ⚠️ **VS Code 告警说明（重点）**
+>
+> 当配置 `type: "http"` 时，VS Code 可能先尝试 OAuth 流程，并提示：
+> “不支持动态客户端注册（manual client registration）”。
+>
+> Easy Memory 当前是 **Bearer Token** 鉴权（`Authorization: Bearer ...`），**不支持 OAuth 动态客户端注册**。
+> 这通常不是 VPS 故障，而是客户端接入模式不匹配。
+>
+> 对 VS Code / Cursor，优先使用上面的**远程代理模式（stdio）**更稳妥。
 
 支持 Streamable HTTP 的客户端可以直接连接远端 MCP 端点，无需 stdio 代理：
 
-**VS Code / Cursor — HTTP 直连：**
+**HTTP 直连（适合明确支持 Bearer Header 的客户端）：**
 
 ```json
 {
@@ -237,9 +267,47 @@ EASY_MEMORY_MODE=http HTTP_AUTH_TOKEN=your-token node dist/index.js
 }
 ```
 
+### VS Code / Cursor 推荐配置（避免 OAuth 告警）
+
+编辑 `.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "easy-memory": {
+      "command": "npx",
+      "args": ["-y", "easy-memory@latest"],
+      "env": {
+        "EASY_MEMORY_URL": "https://memory.zhiz.chat",
+        "EASY_MEMORY_TOKEN": "em_your-api-key"
+      }
+    }
+  }
+}
+```
+
+> 这是 stdio 代理模式：VS Code 不会先走 OAuth 注册探测，工具握手更稳定。
+>
+> 配置变更后，请执行 **Reload Window**，再运行 `MCP: List Servers` 检查状态。
+> 若工具列表为空，优先检查 `EASY_MEMORY_URL` / `EASY_MEMORY_TOKEN`；
+> `GET /health` 返回 `{"status":"ok","mode":"http"}`，且**用于连通性探针时**故意不带 token 访问 `/mcp` 返回 `401`，都属于正常保护行为。
+
 ### 远程 HTTP 模式
 
 如果部署了 HTTP Shell，客户端可通过 HTTP API 接入 — 无需本地 Qdrant/Ollama。详见 [HTTP API](#http-api) 部分。
+
+---
+
+## 30 秒排障（远端优先）
+
+1. **先看配置键名**：VS Code 用 `servers`，Claude/Cursor 常见 `mcpServers`
+2. **强制生效配置**：执行 Reload Window / 重启客户端
+3. **看 MCP 连接状态**：运行 `MCP: List Servers`
+4. **看服务健康**：`GET /health` 返回 `{"status":"ok","mode":"http"}`
+5. **看鉴权语义**：
+
+- 未带 token 访问 `/mcp` 返回 `401` = 正常保护
+- `type: "http"` 出现 OAuth 动态注册提示 = 模式不匹配，切回 stdio 远程代理
 
 ---
 
@@ -451,8 +519,9 @@ ADMIN_TOKEN（管理员）
   └─ 查看 Analytics / Audit 数据
 
 HTTP_AUTH_TOKEN（Master Token）
-  └─ 直接访问所有 MCP 工具
+  └─ 访问 /api/* HTTP API（save/search/forget/status）
   └─ 无 per-key rate limit 限制
+  └─ 不用于 /mcp 握手
 
 Managed API Key（分发给普通用户）
   └─ Admin 通过 POST /api/admin/keys 创建
@@ -478,9 +547,26 @@ curl -X POST https://memory.example.com/api/admin/keys \
 # ⚠️ key 仅此一次返回，请安全保存并发给用户
 ```
 
-#### 用户配置远程 MCP（Streamable HTTP 模式）
+#### 用户配置远程 MCP（推荐：stdio 代理模式）
 
 VS Code / Cursor — 编辑 `.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "easy-memory": {
+      "command": "npx",
+      "args": ["-y", "easy-memory@latest"],
+      "env": {
+        "EASY_MEMORY_URL": "https://memory.example.com",
+        "EASY_MEMORY_TOKEN": "em_abc123..."
+      }
+    }
+  }
+}
+```
+
+#### 可选：Streamable HTTP 直连（进阶）
 
 ```json
 {
@@ -495,6 +581,8 @@ VS Code / Cursor — 编辑 `.vscode/mcp.json`：
   }
 }
 ```
+
+> ⚠️ 若 VS Code 弹出“动态客户端注册”相关 OAuth 提示，请切回上方 stdio 代理模式。
 
 JetBrains IDE — 添加 MCP Server：
 

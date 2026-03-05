@@ -20,9 +20,9 @@
 ## 目录
 
 - [选择适合你的方案](#选择适合你的方案)
-- [方案 A：本地部署（推荐个人用户）](#方案-a本地部署推荐个人用户)
+- [方案 C：远程代理模式（推荐优先）](#方案-c远程代理模式推荐优先--无需-docker)
 - [方案 B：远程服务器部署（推荐团队/多设备）](#方案-b远程服务器部署推荐团队多设备)
-- [方案 C：远程代理模式（最简单）](#方案-c远程代理模式最简单--无需-docker)
+- [方案 A：本地部署（可选）](#方案-a本地部署可选)
 - [连接你的 AI 客户端](#连接你的-ai-客户端)
   - [Claude Desktop](#1-claude-desktop)
   - [Cursor](#2-cursor)
@@ -36,21 +36,37 @@
 
 ## 选择适合你的方案
 
-|              | 方案 A：本地部署           | 方案 B：远程部署       | 方案 C：远程代理（最简单） |
-| ------------ | -------------------------- | ---------------------- | -------------------------- |
-| **适合谁**   | 个人开发者，只在一台电脑用 | 团队协作，或多设备切换 | 有现成远端服务，只想连     |
-| **需要什么** | Mac/Linux/Windows + Docker | 一台云服务器（VPS）    | Node.js + API Key          |
-| **数据存哪** | 你的电脑本地               | 云服务器上             | 云服务器上                 |
-| **难度**     | ⭐⭐ 简单                  | ⭐⭐⭐ 中等            | ⭐ 极简                    |
+|              | 方案 C：远程代理（推荐优先） | 方案 B：远程部署       | 方案 A：本地部署（可选）   |
+| ------------ | ---------------------------- | ---------------------- | -------------------------- |
+| **适合谁**   | 有现成远端服务，只想连       | 团队协作，或多设备切换 | 个人开发者，只在一台电脑用 |
+| **需要什么** | Node.js + API Key            | 一台云服务器（VPS）    | Mac/Linux/Windows + Docker |
+| **数据存哪** | 云服务器上                   | 云服务器上             | 你的电脑本地               |
+| **难度**     | ⭐ 极简                      | ⭐⭐⭐ 中等            | ⭐⭐ 简单                  |
 
 > 💡 **不确定选哪个？**
 >
 > - 如果管理员已经帮你部署好了远端服务并给了你 API Key → 选**方案 C**
-> - 如果你想自己掌控数据 → 先用**方案 A**，随时可以迁移到方案 B
+> - 如果你要团队共享且自己维护服务 → 选**方案 B**
+> - 只有在没有远端服务时，再考虑**方案 A（本地自托管）**
+
+### 30 秒快速接入（推荐）
+
+如果你手上已经有：
+
+- `EASY_MEMORY_URL`（例如 `https://memory.zhiz.chat`）
+- `EASY_MEMORY_TOKEN`（`em_...`）
+
+那就直接走方案 C：
+
+1. 在 MCP 配置里填 `npx easy-memory@latest` + 上述两个 env
+2. Reload Window / 重启客户端
+3. 运行 `MCP: List Servers` 检查是否已连接
+
+> 这条路径最稳定，也最不容易触发 OAuth 动态注册告警。
 
 ---
 
-## 方案 A：本地部署（推荐个人用户）
+## 方案 A：本地部署（可选）
 
 ### 前置条件
 
@@ -221,7 +237,7 @@ curl -X POST https://你的域名/api/admin/keys \
 
 ---
 
-## 方案 C：远程代理模式（最简单 — 无需 Docker）
+## 方案 C：远程代理模式（推荐优先 — 无需 Docker）
 
 如果你已经有一台运行 Easy Memory 的远端服务器（管理员给了你 API Key 和服务地址），只需两步即可完成。
 
@@ -247,6 +263,15 @@ curl -X POST https://你的域名/api/admin/keys \
 ---
 
 ## 连接你的 AI 客户端
+
+### 根键速查（非常重要）
+
+| 客户端                   | MCP 配置根键 |
+| ------------------------ | ------------ |
+| VS Code (GitHub Copilot) | `servers`    |
+| Claude Desktop / Cursor  | `mcpServers` |
+
+键名写错会出现“配置看起来在，但工具列表为空”的假故障。
 
 ### 1. Claude Desktop
 
@@ -323,7 +348,26 @@ curl -X POST https://你的域名/api/admin/keys \
 }
 ```
 
-#### 远程部署（方案 B）— Streamable HTTP 直连
+#### 远程部署（方案 B）— 推荐：远程代理模式（stdio）
+
+```json
+{
+  "mcpServers": {
+    "easy-memory": {
+      "command": "npx",
+      "args": ["-y", "easy-memory@latest"],
+      "env": {
+        "EASY_MEMORY_TOKEN": "em_你的API-Key",
+        "EASY_MEMORY_URL": "https://你的域名"
+      }
+    }
+  }
+}
+```
+
+> 这是 stdio↔HTTP 代理模式，通常能避免 `type: "http"` 在部分客户端触发 OAuth 探测告警。
+
+#### 可选：Streamable HTTP 直连（进阶）
 
 ```json
 {
@@ -338,7 +382,7 @@ curl -X POST https://你的域名/api/admin/keys \
 }
 ```
 
-> 也可使用远程代理模式（与 Claude Desktop 相同的 `EASY_MEMORY_TOKEN` + `EASY_MEMORY_URL` 配置）。
+> 如果你看到 OAuth / 动态客户端注册提示，请切回上面的远程代理模式。
 
 配置完成后，重启 Cursor。
 
@@ -366,7 +410,26 @@ curl -X POST https://你的域名/api/admin/keys \
 }
 ```
 
-#### 远程部署（方案 B）— Streamable HTTP 直连
+#### 远程部署（方案 B）— 推荐：远程代理模式（stdio）
+
+```json
+{
+  "servers": {
+    "easy-memory": {
+      "command": "npx",
+      "args": ["-y", "easy-memory@latest"],
+      "env": {
+        "EASY_MEMORY_TOKEN": "em_你的API-Key",
+        "EASY_MEMORY_URL": "https://你的域名"
+      }
+    }
+  }
+}
+```
+
+> 这是 VS Code 下最稳妥的接入方式：不会先走 OAuth 客户端注册探测。
+
+#### 可选：Streamable HTTP 直连（进阶）
 
 ```json
 {
@@ -382,7 +445,7 @@ curl -X POST https://你的域名/api/admin/keys \
 }
 ```
 
-> 也可使用远程代理模式（与 Claude Desktop 相同的 `EASY_MEMORY_TOKEN` + `EASY_MEMORY_URL` 配置）。
+> ⚠️ 若 VS Code 报“授权服务器不支持动态客户端注册”，请改回上面的远程代理模式（stdio）。
 
 保存后，在 VS Code 命令面板中运行 `MCP: List Servers` 确认连接状态。
 
@@ -585,6 +648,40 @@ docker compose -f docker-compose.prod.yml up -d
 2. **配置文件格式错误** — JSON 语法必须严格正确（注意逗号和引号）
 3. **没有重启 Claude** — 修改配置后必须**完全退出再重新打开** Claude Desktop（不是关闭窗口，是彻底退出应用）
 4. **远程模式 Token 无效** — 确认 `EASY_MEMORY_TOKEN` 以 `em_` 开头，且未被管理员吊销
+
+### Q: VS Code 提示“授权服务器不支持动态客户端注册”怎么办？
+
+**A**: 这是 `type: "http"` 触发的 OAuth 探测提示，而 Easy Memory 当前使用的是 Bearer Token 模式，不是 OAuth 动态注册。
+
+建议直接改用 **远程代理模式（stdio）**：
+
+- `command`: `npx`
+- `args`: `easy-memory@latest`
+- `env`: `EASY_MEMORY_URL` + `EASY_MEMORY_TOKEN`
+
+这通常即可消除告警并稳定握手。
+
+### Q: AI 说“工具未出现在列表，握手未完成”是 VPS 挂了吗？
+
+**A**: 不一定。先按这个顺序排查：
+
+1. 修改 MCP 配置后执行 **Reload Window**
+2. 在命令面板运行 `MCP: List Servers` 查看 server 状态
+3. 检查 JSON 键名是否正确（VS Code 用 `servers`，Claude/Cursor 常见 `mcpServers`）
+4. 检查远端健康：`/health` 返回 `{"status":"ok","mode":"http"}`
+5. 检查鉴权行为：未带 token 访问 `/mcp` 返回 `401` 是正常，说明服务在线且在保护端点
+
+如果 4、5 正常，多数是客户端配置/重载问题，不是 VPS 服务宕机。
+
+### Q: 30 秒快速排障怎么做？
+
+**A**: 按这个顺序走，几乎能覆盖大多数接入问题：
+
+1. 确认根键（VS Code=`servers`，Claude/Cursor=`mcpServers`）
+2. Reload Window / 重启客户端
+3. 看 `MCP: List Servers`
+4. 验证 `GET /health` 是否 `ok`
+5. 若 `type:"http"` 弹 OAuth 动态注册提示，切回 stdio 远程代理模式
 
 ### Q: 多个项目的记忆会互相干扰吗？
 
