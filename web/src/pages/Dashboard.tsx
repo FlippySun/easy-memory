@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../contexts/auth";
-import { adminApi } from "../api/client";
+import { adminApi, type AdminOverviewResponse } from "../api/client";
 import { StatCard, Card } from "../components/ui";
 import {
   Activity,
@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 interface DashboardData {
-  overview: Record<string, unknown> | null;
+  overview: AdminOverviewResponse | null;
   loading: boolean;
   error: string | null;
 }
@@ -58,9 +58,23 @@ export function DashboardPage() {
     );
   }
 
-  const overview = data.overview as Record<string, unknown> | null;
-  const period = overview?.period as Record<string, unknown> | undefined;
-  const totals = period?.totals as Record<string, number> | undefined;
+  const overview = data.overview;
+  const totalRequests = overview?.requests_total ?? 0;
+  const successfulRequests = Math.max(
+    0,
+    totalRequests -
+      (overview?.errors_total ?? 0) -
+      (overview?.rejected_total ?? 0) -
+      (overview?.rate_limited_total ?? 0),
+  );
+  const successRate =
+    totalRequests > 0
+      ? `${Math.round((successfulRequests / totalRequests) * 100)}%`
+      : "—";
+  const activeSince =
+    overview && overview.uptime_ms > 0
+      ? new Date(Date.now() - overview.uptime_ms).toLocaleDateString()
+      : "—";
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -76,34 +90,24 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Total Requests"
-          value={totals?.total_requests ?? "—"}
+          value={overview?.requests_total ?? "—"}
           icon={<Activity size={22} />}
         />
         <StatCard
           title="Success Rate"
-          value={
-            totals?.total_requests
-              ? `${Math.round(((totals?.successful_requests ?? 0) / totals.total_requests) * 100)}%`
-              : "—"
-          }
+          value={successRate}
           icon={<TrendingUp size={22} />}
         />
         <StatCard
-          title="Avg Latency"
+          title="Error Rate"
           value={
-            totals?.avg_latency_ms
-              ? `${Math.round(totals.avg_latency_ms)}ms`
-              : "—"
+            overview ? `${Math.round((overview.error_rate ?? 0) * 100)}%` : "—"
           }
           icon={<Zap size={22} />}
         />
         <StatCard
           title="Active Since"
-          value={
-            period?.start
-              ? new Date(period.start as string).toLocaleDateString()
-              : "—"
-          }
+          value={activeSince}
           icon={<Clock size={22} />}
         />
       </div>

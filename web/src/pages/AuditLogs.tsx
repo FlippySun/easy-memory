@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { adminApi, ApiError } from "../api/client";
+import { adminApi, ApiError, type AdminAuditLogEntry } from "../api/client";
 import { Card, Table, Badge, EmptyState } from "../components/ui";
 import {
   ScrollText,
@@ -9,20 +9,8 @@ import {
   AlertCircle,
 } from "lucide-react";
 
-interface AuditLog {
-  id: number;
-  timestamp: string;
-  operation: string;
-  outcome: string;
-  project: string;
-  key_prefix: string;
-  client_ip: string;
-  latency_ms: number;
-  error_message: string | null;
-}
-
 export function AuditLogsPage() {
-  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [logs, setLogs] = useState<AdminAuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -40,20 +28,17 @@ export function AuditLogsPage() {
     setError(null);
     try {
       const params = new URLSearchParams();
-      params.set("limit", String(pageSize));
-      params.set("offset", String((page - 1) * pageSize));
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
       if (filters.operation) params.set("operation", filters.operation);
       if (filters.outcome) params.set("outcome", filters.outcome);
 
-      const res = await adminApi.getAuditLogs(params.toString());
+      const res = await adminApi.getAuditLogs(params.toString(), {
+        signal: controller.signal,
+      });
       if (!controller.signal.aborted) {
-        const data = res as {
-          logs: AuditLog[];
-          total: number;
-          pagination?: Record<string, number>;
-        };
-        setLogs(data.logs ?? []);
-        setTotal(data.pagination?.total ?? data.total ?? 0);
+        setLogs(res.data ?? res.logs ?? []);
+        setTotal(res.pagination?.total_count ?? res.total ?? 0);
       }
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -83,7 +68,9 @@ export function AuditLogsPage() {
         return "success";
       case "error":
         return "danger";
-      case "denied":
+      case "rejected":
+      case "unauthorized":
+      case "rate_limited":
         return "warning";
       default:
         return "default";
@@ -131,7 +118,9 @@ export function AuditLogsPage() {
             <option value="">All Outcomes</option>
             <option value="success">Success</option>
             <option value="error">Error</option>
-            <option value="denied">Denied</option>
+            <option value="rejected">Rejected</option>
+            <option value="unauthorized">Unauthorized</option>
+            <option value="rate_limited">Rate Limited</option>
           </select>
           <span className="ml-auto text-xs text-slate-500">
             {total.toLocaleString()} total records
@@ -210,14 +199,14 @@ export function AuditLogsPage() {
                 render: (r) => (
                   <span
                     className={`text-xs font-medium ${
-                      r.latency_ms > 1000
+                      r.elapsed_ms > 1000
                         ? "text-red-600"
-                        : r.latency_ms > 500
+                        : r.elapsed_ms > 500
                           ? "text-amber-600"
                           : "text-emerald-600"
                     }`}
                   >
-                    {r.latency_ms}ms
+                    {r.elapsed_ms}ms
                   </span>
                 ),
               },
@@ -225,18 +214,18 @@ export function AuditLogsPage() {
                 key: "error_message",
                 title: "Error",
                 render: (r) =>
-                  r.error_message ? (
+                  r.outcome !== "success" && r.outcome_detail ? (
                     <span
-                      className="text-xs text-red-600 max-w-[200px] truncate block"
-                      title={r.error_message}
+                      className="text-xs text-red-600 max-w-50 truncate block"
+                      title={r.outcome_detail}
                     >
-                      {r.error_message}
+                      {r.outcome_detail}
                     </span>
                   ) : null,
               },
             ]}
             data={logs}
-            rowKey={(r) => r.id}
+            rowKey={(r) => r.event_id}
           />
         )}
       </Card>

@@ -126,18 +126,21 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) =>
+  get: <T>(path: string, options?: RequestInit) => request<T>(path, options),
+  post: <T>(path: string, body?: unknown, options: RequestInit = {}) =>
     request<T>(path, {
+      ...options,
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
     }),
-  patch: <T>(path: string, body?: unknown) =>
+  patch: <T>(path: string, body?: unknown, options: RequestInit = {}) =>
     request<T>(path, {
+      ...options,
       method: "PATCH",
       body: body ? JSON.stringify(body) : undefined,
     }),
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  delete: <T>(path: string, options: RequestInit = {}) =>
+    request<T>(path, { ...options, method: "DELETE" }),
 };
 
 // =====================================================================
@@ -223,13 +226,99 @@ export interface ApiKeyDeleteResponse {
 }
 
 export interface BanRecord {
-  id: number;
-  target_type: string;
-  target_value: string;
+  id: string;
+  type: "api_key" | "ip";
+  target: string;
   reason: string;
   created_at: string;
   expires_at: string | null;
   created_by: string;
+  is_active: boolean;
+  is_expired: boolean;
+}
+
+export interface AdminOverviewResponse {
+  requests_total: number;
+  errors_total: number;
+  error_rate: number;
+  rate_limited_total: number;
+  rejected_total: number;
+  uptime_ms: number;
+  analytics_ready: boolean;
+  audit_stats?: Record<string, unknown>;
+}
+
+export interface AdminAnalyticsCollectionResponse<T> {
+  data: T[];
+  total: number;
+}
+
+export interface AdminTimelinePoint {
+  time_bucket: string;
+  granularity: "hourly" | "daily";
+  key_prefix: string;
+  project: string;
+  operation: string;
+  total_count: number;
+  success_count: number;
+  error_count: number;
+  rejected_count: number;
+  rate_limited_count: number;
+  avg_elapsed_ms: number;
+  max_elapsed_ms: number;
+  p95_elapsed_ms: number;
+  search_hit_count: number;
+  search_total_count: number;
+  avg_top_score: number;
+  avg_result_count: number;
+}
+
+export interface AdminOperationDistribution {
+  operation: string;
+  count: number;
+  percentage: number;
+  avg_elapsed_ms: number;
+  error_rate: number;
+}
+
+export interface AdminErrorRateResponse {
+  from: string;
+  to: string;
+  total_requests: number;
+  error_count: number;
+  error_rate: number;
+  rejected_count: number;
+  rate_limited_count: number;
+  by_operation: Record<string, { errors: number; total: number; rate: number }>;
+}
+
+export interface AdminAuditLogEntry {
+  event_id: string;
+  timestamp: string;
+  key_prefix: string;
+  user_agent: string;
+  client_ip: string;
+  operation: string;
+  project: string;
+  outcome: string;
+  outcome_detail: string;
+  elapsed_ms: number;
+  http_method: string;
+  http_path: string;
+  http_status: number;
+}
+
+export interface AdminAuditLogsResponse {
+  data: AdminAuditLogEntry[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total_count: number;
+    total_pages: number;
+  };
+  // 兼容旧前端字段
+  logs?: AdminAuditLogEntry[];
+  total?: number;
 }
 
 export const adminApi = {
@@ -262,44 +351,52 @@ export const adminApi = {
       "/admin/bans",
     ),
   createBan: (data: {
-    target_type: string;
-    target_value: string;
+    type: "api_key" | "ip";
+    target: string;
     reason: string;
-    duration_hours?: number;
-  }) => api.post<{ ban: BanRecord }>("/admin/bans", data),
-  deleteBan: (id: number) =>
+    ttl_seconds?: number;
+    expires_at?: string;
+  }) => api.post<BanRecord>("/admin/bans", data),
+  deleteBan: (id: string) =>
     api.delete<{ success: boolean }>(`/admin/bans/${id}`),
 
   // Analytics
-  getOverview: (params?: string) =>
-    api.get<Record<string, unknown>>(
+  getOverview: (params?: string, options?: RequestInit) =>
+    api.get<AdminOverviewResponse>(
       `/admin/analytics/overview${params ? `?${params}` : ""}`,
+      options,
     ),
-  getTimeline: (params?: string) =>
-    api.get<Record<string, unknown>>(
+  getTimeline: (params?: string, options?: RequestInit) =>
+    api.get<AdminAnalyticsCollectionResponse<AdminTimelinePoint>>(
       `/admin/analytics/timeline${params ? `?${params}` : ""}`,
+      options,
     ),
-  getUsers: (params?: string) =>
+  getUsers: (params?: string, options?: RequestInit) =>
     api.get<Record<string, unknown>>(
       `/admin/analytics/users${params ? `?${params}` : ""}`,
+      options,
     ),
-  getOperations: (params?: string) =>
-    api.get<Record<string, unknown>>(
+  getOperations: (params?: string, options?: RequestInit) =>
+    api.get<AdminAnalyticsCollectionResponse<AdminOperationDistribution>>(
       `/admin/analytics/operations${params ? `?${params}` : ""}`,
+      options,
     ),
-  getErrors: (params?: string) =>
-    api.get<Record<string, unknown>>(
+  getErrors: (params?: string, options?: RequestInit) =>
+    api.get<AdminErrorRateResponse>(
       `/admin/analytics/errors${params ? `?${params}` : ""}`,
+      options,
     ),
-  getHitRate: (params?: string) =>
+  getHitRate: (params?: string, options?: RequestInit) =>
     api.get<Record<string, unknown>>(
       `/admin/analytics/hit-rate${params ? `?${params}` : ""}`,
+      options,
     ),
 
   // Audit
-  getAuditLogs: (params?: string) =>
-    api.get<Record<string, unknown>>(
+  getAuditLogs: (params?: string, options?: RequestInit) =>
+    api.get<AdminAuditLogsResponse>(
       `/admin/audit/logs${params ? `?${params}` : ""}`,
+      options,
     ),
 
   // Config

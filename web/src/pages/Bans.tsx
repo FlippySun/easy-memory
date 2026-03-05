@@ -18,16 +18,16 @@ export function BansPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({
-    target_type: "ip",
-    target_value: "",
+    type: "ip" as "ip" | "api_key",
+    target: "",
     reason: "",
-    duration_hours: "",
+    durationHours: "",
   });
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
   } | null>(null);
-  const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const fetchBans = useCallback(async () => {
     try {
@@ -45,23 +45,24 @@ export function BansPage() {
   }, [fetchBans]);
 
   const handleCreate = async () => {
-    if (!form.target_value.trim() || !form.reason.trim()) return;
+    if (!form.target.trim() || !form.reason.trim()) return;
     setCreating(true);
     try {
+      const hours = Number.parseInt(form.durationHours, 10);
       await adminApi.createBan({
-        target_type: form.target_type,
-        target_value: form.target_value,
+        type: form.type,
+        target: form.target,
         reason: form.reason,
-        ...(form.duration_hours
-          ? { duration_hours: parseInt(form.duration_hours) }
+        ...(Number.isFinite(hours) && hours > 0
+          ? { ttl_seconds: hours * 3600 }
           : {}),
       });
       setShowCreate(false);
       setForm({
-        target_type: "ip",
-        target_value: "",
+        type: "ip",
+        target: "",
         reason: "",
-        duration_hours: "",
+        durationHours: "",
       });
       await fetchBans();
       setToast({ message: "Ban created", type: "success" });
@@ -76,7 +77,7 @@ export function BansPage() {
   };
 
   const handleDelete = async (ban: BanRecord) => {
-    if (!confirm(`Remove ban for ${ban.target_value}?`)) return;
+    if (!confirm(`Remove ban for ${ban.target}?`)) return;
     if (actionLoading !== null) return;
     setActionLoading(ban.id);
     try {
@@ -122,20 +123,20 @@ export function BansPage() {
           <Table
             columns={[
               {
-                key: "target_type",
+                key: "type",
                 title: "Type",
                 render: (r) => (
-                  <Badge variant={r.target_type === "ip" ? "info" : "warning"}>
-                    {r.target_type}
+                  <Badge variant={r.type === "ip" ? "info" : "warning"}>
+                    {r.type}
                   </Badge>
                 ),
               },
               {
-                key: "target_value",
+                key: "target",
                 title: "Target",
                 render: (r) => (
                   <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">
-                    {r.target_value}
+                    {r.target}
                   </code>
                 ),
               },
@@ -173,7 +174,7 @@ export function BansPage() {
                     >
                       {isLoading ? (
                         <svg
-                          className="animate-spin w-[18px] h-[18px]"
+                          className="animate-spin w-4.5 h-4.5"
                           viewBox="0 0 24 24"
                           fill="none"
                         >
@@ -226,25 +227,24 @@ export function BansPage() {
               Target Type
             </label>
             <select
-              value={form.target_type}
+              value={form.type}
               onChange={(e) =>
-                setForm((p) => ({ ...p, target_type: e.target.value }))
+                setForm((p) => ({
+                  ...p,
+                  type: e.target.value as "ip" | "api_key",
+                }))
               }
               className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
             >
               <option value="ip">IP Address</option>
-              <option value="key">API Key</option>
+              <option value="api_key">API Key</option>
             </select>
           </div>
           <Input
             label="Target Value"
-            value={form.target_value}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, target_value: e.target.value }))
-            }
-            placeholder={
-              form.target_type === "ip" ? "192.168.1.1" : "key-hash-prefix"
-            }
+            value={form.target}
+            onChange={(e) => setForm((p) => ({ ...p, target: e.target.value }))}
+            placeholder={form.type === "ip" ? "192.168.1.1" : "key-id"}
           />
           <Input
             label="Reason"
@@ -255,9 +255,9 @@ export function BansPage() {
           <Input
             label="Duration (hours, empty = permanent)"
             type="number"
-            value={form.duration_hours}
+            value={form.durationHours}
             onChange={(e) =>
-              setForm((p) => ({ ...p, duration_hours: e.target.value }))
+              setForm((p) => ({ ...p, durationHours: e.target.value }))
             }
             placeholder="24"
           />

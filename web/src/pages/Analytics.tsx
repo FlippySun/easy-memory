@@ -1,20 +1,26 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { adminApi, ApiError } from "../api/client";
+import {
+  adminApi,
+  ApiError,
+  type AdminOverviewResponse,
+  type AdminTimelinePoint,
+  type AdminOperationDistribution,
+  type AdminErrorRateResponse,
+} from "../api/client";
 import { Card, StatCard } from "../components/ui";
 import {
   BarChart3,
   TrendingUp,
   AlertCircle,
   Zap,
-  Users,
   Activity,
 } from "lucide-react";
 
 interface AnalyticsData {
-  overview: Record<string, unknown> | null;
-  timeline: Record<string, unknown> | null;
-  operations: Record<string, unknown> | null;
-  errors: Record<string, unknown> | null;
+  overview: AdminOverviewResponse | null;
+  timeline: { data: AdminTimelinePoint[]; total: number } | null;
+  operations: { data: AdminOperationDistribution[]; total: number } | null;
+  errors: AdminErrorRateResponse | null;
 }
 
 export function AnalyticsPage() {
@@ -38,13 +44,12 @@ export function AnalyticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const hours = timeRange === "24h" ? 24 : timeRange === "7d" ? 168 : 720;
-      const param = `hours=${hours}`;
+      const param = `range=${encodeURIComponent(timeRange)}`;
       const [overview, timeline, operations, errors] = await Promise.all([
-        adminApi.getOverview(param),
-        adminApi.getTimeline(param),
-        adminApi.getOperations(param),
-        adminApi.getErrors(param),
+        adminApi.getOverview(param, { signal: controller.signal }),
+        adminApi.getTimeline(param, { signal: controller.signal }),
+        adminApi.getOperations(param, { signal: controller.signal }),
+        adminApi.getErrors(param, { signal: controller.signal }),
       ]);
       // 仅在未被中止时更新状态
       if (!controller.signal.aborted) {
@@ -72,14 +77,43 @@ export function AnalyticsPage() {
     };
   }, [fetchData]);
 
-  const period = (data.overview?.period as Record<string, unknown>) ?? {};
-  const totals = (period?.totals as Record<string, number>) ?? {};
-  const opBreakdown =
-    (data.operations?.operations as Array<Record<string, unknown>>) ?? [];
-  const errorList =
-    (data.errors?.errors as Array<Record<string, unknown>>) ?? [];
-  const timelineData =
-    (data.timeline?.timeline as Array<Record<string, unknown>>) ?? [];
+  const overview = data.overview;
+  const opBreakdown = data.operations?.data ?? [];
+  const timelineData = data.timeline?.data ?? [];
+
+  const totalRequests = overview?.requests_total ?? 0;
+  const successfulRequests = Math.max(
+    0,
+    totalRequests -
+      (overview?.errors_total ?? 0) -
+      (overview?.rejected_total ?? 0) -
+      (overview?.rate_limited_total ?? 0),
+  );
+  const successRate =
+    totalRequests > 0
+      ? `${Math.round((successfulRequests / totalRequests) * 100)}%`
+      : "—";
+
+  const totalTimelineRequests = timelineData.reduce(
+    (sum, point) => sum + point.total_count,
+    0,
+  );
+  const weightedLatencySum = timelineData.reduce(
+    (sum, point) => sum + point.avg_elapsed_ms * point.total_count,
+    0,
+  );
+  const avgLatencyMs =
+    totalTimelineRequests > 0 ? weightedLatencySum / totalTimelineRequests : 0;
+
+  const errorList = Object.entries(data.errors?.by_operation ?? {})
+    .map(([operation, stats]) => ({
+      operation,
+      count: stats.errors,
+      total: stats.total,
+      rate: stats.rate,
+    }))
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -124,31 +158,27 @@ export function AnalyticsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard
               title="Total Requests"
-              value={totals?.total_requests ?? 0}
+              value={totalRequests}
               icon={<Activity size={22} />}
             />
             <StatCard
               title="Success Rate"
-              value={
-                totals?.total_requests
-                  ? `${Math.round(((totals?.successful_requests ?? 0) / totals.total_requests) * 100)}%`
-                  : "—"
-              }
+              value={successRate}
               icon={<TrendingUp size={22} />}
             />
             <StatCard
-              title="Avg Latency"
+              title="Error Rate"
               value={
-                totals?.avg_latency_ms
-                  ? `${Math.round(totals.avg_latency_ms)}ms`
+                overview
+                  ? `${Math.round((overview.error_rate ?? 0) * 100)}%`
                   : "—"
               }
               icon={<Zap size={22} />}
             />
             <StatCard
-              title="Unique Users"
-              value={totals?.unique_key_prefixes ?? 0}
-              icon={<Users size={22} />}
+              title="Avg Latency"
+              value={avgLatencyMs > 0 ? `${Math.round(avgLatencyMs)}ms` : "—"}
+              icon={<Activity size={22} />}
             />
           </div>
 
@@ -169,16 +199,16 @@ export function AnalyticsPage() {
             ) : (
               <div className="space-y-3">
                 {opBreakdown.map((op, i) => {
-                  const count = (op.count as number) || 0;
+                  const count = op.count || 0;
                   const maxCount = Math.max(
-                    ...opBreakdown.map((o) => (o.count as number) || 0),
+                    ...opBreakdown.map((o) => o.count || 0),
                   );
                   const pct = maxCount > 0 ? (count / maxCount) * 100 : 0;
                   return (
                     <div key={i} className="space-y-1">
                       <div className="flex items-center justify-between text-sm">
                         <span className="font-medium text-slate-700">
-                          {op.operation as string}
+                          {op.operation}
                         </span>
                         <span className="text-slate-500">
                           {count.toLocaleString()}
@@ -210,11 +240,9 @@ export function AnalyticsPage() {
               </div>
               <div className="flex items-end gap-1 h-32">
                 {timelineData.slice(-48).map((point, i) => {
-                  const count = (point.count as number) || 0;
+                  const count = point.total_count || 0;
                   const maxVal = Math.max(
-                    ...timelineData
-                      .slice(-48)
-                      .map((p) => (p.count as number) || 0),
+                    ...timelineData.slice(-48).map((p) => p.total_count || 0),
                   );
                   const height = maxVal > 0 ? (count / maxVal) * 100 : 0;
                   return (
@@ -222,7 +250,7 @@ export function AnalyticsPage() {
                       key={i}
                       className="flex-1 bg-primary-200 hover:bg-primary-400 rounded-t transition-colors cursor-default"
                       style={{ height: `${Math.max(height, 2)}%` }}
-                      title={`${point.bucket}: ${count} requests`}
+                      title={`${new Date(point.time_bucket).toLocaleString()}: ${count} requests`}
                     />
                   );
                 })}
@@ -246,10 +274,10 @@ export function AnalyticsPage() {
                     className="flex items-center justify-between text-sm p-2 rounded-lg bg-red-50/50"
                   >
                     <span className="text-red-800 font-medium">
-                      {err.operation as string}
+                      {err.operation}
                     </span>
                     <span className="text-red-600">
-                      {(err.count as number)?.toLocaleString()} occurrences
+                      {err.count.toLocaleString()} occurrences
                     </span>
                   </div>
                 ))}
