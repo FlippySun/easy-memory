@@ -5,7 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.2] - 2025-07-08
+## [0.5.3] - 2026-03-06
+
+### Fixed
+
+- **[Schema] 审计日志分页上限一致性**: `AuditQuerySchema.page_size` 与 `PaginationSchema.page_size` 的 `max` 从 1000 统一降至 100，与 `ListBansQuerySchema`、`ListApiKeysQuerySchema` 保持一致。修复前 `/api/admin/audit/logs?page_size=101` 返回 200，修复后与其他管理端点行为一致返回 400。
+
+### Changed
+
+- **[MCP] `server.ts` 全面强化**: MCP 本地 stdio 服务器新增审计日志写入链路（`buildEntry` + `record` + `ingestEvent` 三连写），与 HTTP 模式保持对等；新增请求级 `project` 路由逻辑；完善工具错误处理。
+- **[MCP] `remote-server.ts` 代理稳定性**: 改进远程代理模式的错误捕获与 backpressure 处理；增强 `EASY_MEMORY_URL` 连接失败时的用户友好错误信息。
+- **[API] 认证与 RBAC 强化**: `admin-auth.ts` 完善 role downgrade 即时生效逻辑；`auth-routes.ts` 新增 `/api/auth/users` 用户列表端点（admin only）；`server.ts` 增加额外 audit middleware 覆盖路由。
+- **[Tools] `forget.ts` / `save.ts` 改进**: `forget` 工具增加 soft-delete 后的 `getPointPayload` 验证；`save` 工具优化 hash 校验与脱敏顺序。
+- **[Services] `qdrant.ts` 稳定性**: 新增 `getPointPayload` 方法；`upsert` 增加 wait 参数强制等待写入确认，防止幻读。
+- **[Web] 管理面板 UI 细节优化**: Analytics、AuditLogs、Bans、Dashboard 页面修复分页参数溢出、筛选状态重置 bug；`api/client.ts` 统一处理 401 自动续登失败逻辑。
+
+### Tests
+
+- **测试 mock 漂移修复** (`tests/api/server.test.ts`): 补齐 `qdrant.getPointPayload`、`audit.buildEntry`、`audit.record`、`analytics.ingestEvent` 4 个缺失 mock，新增 audit 链路断言，消除假绿灯。
+- **新增 RBAC 回归测试** (`tests/api/auth-rbac-regression.test.ts`): 覆盖 role promote/downgrade 流程及管理端点即时鉴权。
+- **新增 MCP 服务测试** (`tests/mcp/server.test.ts`, `tests/mcp/remote-server.test.ts`): 单元测试 MCP 工具调用、审计链路、代理模式转发。
+- **审计分页边界测试** (`tests/audit-analytics-comprehensive.test.ts`): 新增 `page_size=101→400` 边界用例及大量场景覆盖扩充。
+- **总计: 36 文件, 869 测试用例全部通过**
+
+
 
 ### Added
 
