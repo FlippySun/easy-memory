@@ -276,7 +276,7 @@ export type TimeRangeQuery = z.infer<typeof TimeRangeQuerySchema>;
 /** 分页参数 */
 export const PaginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  page_size: z.coerce.number().int().min(1).max(1000).default(50),
+  page_size: z.coerce.number().int().min(1).max(100).default(50),
 });
 
 export type PaginationParams = z.infer<typeof PaginationSchema>;
@@ -295,7 +295,7 @@ export const AuditQuerySchema = z
       .optional()
       .default("24h"),
     page: z.coerce.number().int().min(1).default(1),
-    page_size: z.coerce.number().int().min(1).max(1000).default(50),
+    page_size: z.coerce.number().int().min(1).max(100).default(50),
   })
   .strip();
 
