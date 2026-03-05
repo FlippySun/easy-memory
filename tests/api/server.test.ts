@@ -43,6 +43,10 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
         name: "em_test-project",
         points_count: 42,
       }),
+      getPointPayload: vi.fn().mockResolvedValue({
+        lifecycle: "active",
+        project: "test-project",
+      }),
       ensureConnected: vi.fn().mockResolvedValue(undefined),
       ensureCollection: vi.fn().mockResolvedValue("em_test-project"),
       upsert: vi.fn().mockResolvedValue(undefined),
@@ -80,6 +84,24 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
       encode: vi.fn().mockReturnValue({ indices: [100], values: [1.0] }),
     } as any,
     audit: {
+      buildEntry: vi
+        .fn()
+        .mockImplementation((params: Record<string, unknown>) => ({
+          event_id: "evt-test",
+          timestamp: new Date().toISOString(),
+          key_prefix: String(params.keyPrefix ?? ""),
+          user_agent: String(params.userAgent ?? ""),
+          client_ip: String(params.clientIp ?? ""),
+          operation: String(params.operation ?? "memory_status"),
+          project: String(params.project ?? "test-project"),
+          outcome: String(params.outcome ?? "success"),
+          outcome_detail: String(params.outcomeDetail ?? ""),
+          elapsed_ms: Number(params.elapsedMs ?? 0),
+          http_method: String(params.httpMethod ?? "GET"),
+          http_path: String(params.httpPath ?? "/api/status"),
+          http_status: Number(params.httpStatus ?? 200),
+        })),
+      record: vi.fn(),
       recordEvent: vi.fn(),
       getStats: vi.fn().mockReturnValue({
         total_events: 0,
@@ -91,6 +113,7 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     } as any,
     analytics: {
       isReady: true,
+      ingestEvent: vi.fn().mockReturnValue(true),
       recordEvent: vi.fn(),
       queryEvents: vi.fn().mockReturnValue({
         data: [],
@@ -237,6 +260,85 @@ describe("HTTP API Server", () => {
     });
   });
 
+  // ===== MCP Streamable HTTP (/mcp) =====
+
+  describe("POST /mcp", () => {
+    it("should allow valid unbanned API key", async () => {
+      (
+        container.apiKeyManager.validateKey as ReturnType<typeof vi.fn>
+      ).mockReturnValue({
+        id: "key-1",
+        key_hash: "abcd1234hash",
+        prefix: "em_test",
+      });
+      (
+        container.banManager.isKeyBanned as ReturnType<typeof vi.fn>
+      ).mockReturnValue({ banned: false });
+
+      const app = createApp(container);
+      const res = await app.request("/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer managed-key",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "vitest", version: "1.0.0" },
+          },
+        }),
+      });
+
+      expect(res.status).not.toBe(403);
+      expect(container.apiKeyManager.recordUsage).toHaveBeenCalled();
+    });
+
+    it("should reject banned API key with 403", async () => {
+      (
+        container.apiKeyManager.validateKey as ReturnType<typeof vi.fn>
+      ).mockReturnValue({
+        id: "key-2",
+        key_hash: "efgh5678hash",
+        prefix: "em_test",
+      });
+      (
+        container.banManager.isKeyBanned as ReturnType<typeof vi.fn>
+      ).mockReturnValue({
+        banned: true,
+        reason: "manual ban",
+        expires_at: null,
+      });
+
+      const app = createApp(container);
+      const res = await app.request("/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer banned-key",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "vitest", version: "1.0.0" },
+          },
+        }),
+      });
+
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error?.message).toContain("banned");
+    });
+  });
+
   // ===== Auth =====
 
   describe("Authentication", () => {
@@ -252,6 +354,9 @@ describe("HTTP API Server", () => {
         headers: { Authorization: "Bearer test-token" },
       });
       expect(res.status).toBe(200);
+      expect((container.audit as any).buildEntry).toHaveBeenCalledTimes(1);
+      expect((container.audit as any).record).toHaveBeenCalledTimes(1);
+      expect((container.analytics as any).ingestEvent).toHaveBeenCalledTimes(1);
     });
 
     it("should skip auth when token is empty (dev mode)", async () => {
@@ -326,6 +431,10 @@ describe("HTTP API Server", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.status).toBeDefined();
+      expect((container.qdrant as any).getPointPayload).toHaveBeenCalledWith(
+        "test-project",
+        "550e8400-e29b-41d4-a716-446655440000",
+      );
     });
   });
 
