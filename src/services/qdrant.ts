@@ -399,6 +399,28 @@ export class QdrantService {
   }
 
   /**
+   * [FIX D12/C8]: 检索指定点的 payload，用于 forget 前验证点存在性和当前状态。
+   * 返回 null 表示点不存在。
+   */
+  async getPointPayload(
+    project: string,
+    pointId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const name = await this.ensureCollection(project);
+    try {
+      const result = await this.client.retrieve(name, {
+        ids: [pointId],
+        with_payload: true,
+        with_vector: false,
+      });
+      if (!result || result.length === 0) return null;
+      return (result[0].payload as Record<string, unknown>) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 获取 collection 信息。
    */
   async getCollectionInfo(

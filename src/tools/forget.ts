@@ -70,6 +70,32 @@ export async function handleForget(
   try {
     const now = new Date().toISOString();
 
+    // [FIX D12/C8]: 先验证点存在性和当前状态
+    const existingPayload = await deps.qdrant.getPointPayload(
+      project,
+      input.id,
+    );
+    if (!existingPayload) {
+      log.warn("Forget target not found", { id: input.id, project });
+      return {
+        status: "not_found",
+        message: `Memory ${input.id} not found in project "${project}".`,
+      };
+    }
+
+    // [FIX C8]: 幂等检查 — 如果已处于目标状态，返回提示而非重复操作
+    const currentLifecycle = existingPayload.lifecycle as string | undefined;
+    if (currentLifecycle === newLifecycle) {
+      log.info("Memory already in target lifecycle state", {
+        id: input.id,
+        lifecycle: newLifecycle,
+      });
+      return {
+        status: effectiveAction === "archive" ? "archived" : "forgotten",
+        message: `Memory ${input.id} is already ${newLifecycle}. No changes made.`,
+      };
+    }
+
     await deps.qdrant.setPayload(project, input.id, {
       lifecycle: newLifecycle,
       updated_at: now,

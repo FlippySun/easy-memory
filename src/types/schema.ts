@@ -69,7 +69,8 @@ export const CURRENT_SCHEMA_VERSION = 2;
 // D1-1: All input schemas use .passthrough() for forward compatibility
 export const MemorySaveInputSchema = z
   .object({
-    content: z.string().min(1),
+    // [FIX A2]: trim() before min(1) to reject whitespace-only content
+    content: z.string().trim().min(1),
     project: z.string().optional(),
     source: z.enum(SOURCE_ENUM).optional(),
     fact_type: z.enum(FACT_TYPE_ENUM).optional(),

@@ -11,6 +11,11 @@ function createMockDeps(): ForgetHandlerDeps {
   return {
     qdrant: {
       setPayload: vi.fn().mockResolvedValue(undefined),
+      // [FIX D12/C8]: 默认返回 active 状态的 payload，模拟点存在
+      getPointPayload: vi.fn().mockResolvedValue({
+        lifecycle: "active",
+        project: "test-project",
+      }),
       ensureCollection: vi.fn().mockResolvedValue("em_test"),
       upsert: vi.fn(),
       search: vi.fn(),
@@ -76,9 +81,8 @@ describe("handleForget", () => {
   });
 
   it("should return not_found on Qdrant error", async () => {
-    (deps.qdrant.setPayload as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("point not found"),
-    );
+    // [FIX D12]: getPointPayload 返回 null 表示点不存在
+    (deps.qdrant as any).getPointPayload.mockResolvedValueOnce(null);
 
     const result = await handleForget(
       { id: VALID_UUID, action: "archive", reason: "test" },
@@ -86,10 +90,11 @@ describe("handleForget", () => {
     );
 
     expect(result.status).toBe("not_found");
-    expect(result.message).toContain("Failed");
+    expect(result.message).toContain("not found");
   });
 
   it("should return not_found on Qdrant 'Not Found' (uppercase) error", async () => {
+    // setPayload throws after getPointPayload succeeds
     (deps.qdrant.setPayload as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("Not Found"),
     );

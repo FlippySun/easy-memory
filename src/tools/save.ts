@@ -201,7 +201,14 @@ export async function handleSave(
   // [FIX H-5]: NFKC 归一化前置到 injection 检测之前
   // 防止全角 Unicode (ｓｙｓｔｅｍ) 绕过正则
   const normalizedContent = input.content.normalize("NFKC");
-  if (detectPromptInjection(normalizedContent)) {
+
+  // [FIX A3]: 剥离零宽字符和双向控制字符，防止注入检测被绕过
+  // NFKC 不剥离 U+200B-200F, U+2028-202F, U+2060-206F, U+FEFF 等
+  const strippedContent = normalizedContent.replace(
+    /[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g,
+    "",
+  );
+  if (detectPromptInjection(strippedContent)) {
     log.warn("Prompt injection detected, rejecting save", { project });
     return {
       id: "",
@@ -209,6 +216,20 @@ export async function handleSave(
       message:
         "Content contains patterns that appear to be prompt injection attempts.",
     };
+  }
+
+  // [FIX B4]: fact_type / confidence 交叉校验 — 防止语义投毒
+  // verified_fact 必须 confidence >= 0.8，否则自动降级为 hypothesis
+  if (
+    input.fact_type === "verified_fact" &&
+    input.confidence !== undefined &&
+    input.confidence < 0.8
+  ) {
+    log.warn("verified_fact with low confidence, downgrading to hypothesis", {
+      project,
+      confidence: input.confidence,
+    });
+    input.fact_type = "hypothesis";
   }
 
   // D5-1: per-project 串行化，防止并发去重竞态
