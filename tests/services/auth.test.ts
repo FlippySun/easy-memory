@@ -376,8 +376,10 @@ describe("AuthService", () => {
       const perms = service.getPermissions("user");
       expect(perms).toContain("memory:save");
       expect(perms).toContain("keys:self");
-      expect(perms).not.toContain("analytics:read");
-      expect(perms).not.toContain("audit:read");
+      // v0.7.0: user 角色现在拥有 analytics:read, audit:read, memories:browse
+      expect(perms).toContain("analytics:read");
+      expect(perms).toContain("audit:read");
+      expect(perms).toContain("memories:browse");
       expect(perms).not.toContain("users:list");
       expect(perms).not.toContain("keys:create");
       expect(perms).not.toContain("config:update");

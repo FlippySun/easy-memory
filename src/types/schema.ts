@@ -26,6 +26,10 @@ export const LIFECYCLE_ENUM = [
   "archived",
 ] as const;
 
+// v0.7.0: 记忆层级隔离枚举
+export const MEMORY_SCOPE_ENUM = ["global", "project", "branch"] as const;
+export const MEMORY_TYPE_ENUM = ["long_term", "short_term"] as const;
+
 // ===== 核心 Metadata Schema =====
 export const MemoryMetadataSchema = z.object({
   content: z.string().min(1, "内容不能为空"),
@@ -54,6 +58,15 @@ export const MemoryMetadataSchema = z.object({
 
   schema_version: z.number().int().positive().default(2),
   embedding_model: z.string().default("unknown"),
+
+  // v0.7.0: 记忆层级隔离 & 权重
+  device_id: z.string().max(128).default("unknown"),
+  git_branch: z.string().max(256).default(""),
+  memory_scope: z.enum(MEMORY_SCOPE_ENUM).default("project"),
+  memory_type: z.enum(MEMORY_TYPE_ENUM).default("long_term"),
+  weight: z.number().min(0).max(10).default(1.0),
+  /** 记忆所有者的 API Key 前缀 — 用于用户级隔离 */
+  owner_key_prefix: z.string().default(""),
 });
 
 // ===== 类型导出 =====
@@ -61,6 +74,8 @@ export type MemoryMetadata = z.infer<typeof MemoryMetadataSchema>;
 export type MemorySource = (typeof SOURCE_ENUM)[number];
 export type FactType = (typeof FACT_TYPE_ENUM)[number];
 export type Lifecycle = (typeof LIFECYCLE_ENUM)[number];
+export type MemoryScope = (typeof MEMORY_SCOPE_ENUM)[number];
+export type MemoryType = (typeof MEMORY_TYPE_ENUM)[number];
 
 // ===== Schema 版本常量 =====
 export const CURRENT_SCHEMA_VERSION = 2;
@@ -79,6 +94,12 @@ export const MemorySaveInputSchema = z
     source_file: z.string().optional(),
     source_line: z.number().int().positive().optional(),
     related_ids: z.array(z.string()).optional(),
+    // v0.7.0: 记忆层级隔离 & 权重
+    device_id: z.string().max(128).optional(),
+    git_branch: z.string().max(256).optional(),
+    memory_scope: z.enum(MEMORY_SCOPE_ENUM).optional(),
+    memory_type: z.enum(MEMORY_TYPE_ENUM).optional(),
+    weight: z.number().min(0).max(10).optional(),
   })
   .passthrough();
 
@@ -99,6 +120,10 @@ export const MemorySearchInputSchema = z
      * 设为 true: 返回所有模型的记忆（score 可能不准确，附带警告）。
      */
     cross_model: z.boolean().default(false),
+    // v0.7.0: 层级过滤
+    device_id: z.string().optional(),
+    git_branch: z.string().optional(),
+    memory_scope: z.enum(MEMORY_SCOPE_ENUM).optional(),
   })
   .passthrough();
 
@@ -151,6 +176,12 @@ export interface MemorySearchResult {
   created_at: string;
   source_file?: string;
   source_line?: number;
+  // v0.7.0: 记忆层级隔离 & 权重
+  device_id?: string;
+  git_branch?: string;
+  memory_scope?: string;
+  memory_type?: string;
+  weight?: number;
 }
 
 export interface MemorySearchOutput {

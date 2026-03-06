@@ -112,6 +112,22 @@ export interface AuditLogEntry {
   /** Forget: 原因 */
   forget_reason?: string;
 
+  // === v0.7.0: 扩展字段 ===
+  /** Save: 完整记忆内容（截断至 2000 字符，已脱敏） */
+  content_full?: string;
+  /** Search: 完整查询（截断至 2000 字符） */
+  query_full?: string;
+  /** Error: 错误堆栈（截断至 1000 字符） */
+  error_stack?: string;
+  /** Error: 具体错误码 */
+  error_code?: string;
+  /** 来源设备标识 */
+  device_id?: string;
+  /** 来源 git 分支 */
+  git_branch?: string;
+  /** 记忆层级: global/project/branch */
+  memory_scope?: string;
+
   // === Performance 指标 ===
   /** 请求总耗时 (ms) */
   elapsed_ms: number;
@@ -296,6 +312,10 @@ export const AuditQuerySchema = z
       .default("24h"),
     page: z.coerce.number().int().min(1).default(1),
     page_size: z.coerce.number().int().min(1).max(100).default(50),
+    // v0.7.0: 新增筛选字段
+    device_id: z.string().optional(),
+    git_branch: z.string().optional(),
+    memory_scope: z.string().optional(),
   })
   .strip();
 

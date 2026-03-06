@@ -186,6 +186,39 @@ export class AnalyticsService {
       // 建表
       this.db.exec(CREATE_TABLES_SQL);
 
+      // v0.7.0: 安全迁移 — 新增审计字段（ALTER TABLE ADD COLUMN 幂等处理）
+      const newColumns = [
+        ["content_full", "TEXT"],
+        ["query_full", "TEXT"],
+        ["error_stack", "TEXT"],
+        ["error_code", "TEXT"],
+        ["device_id", "TEXT"],
+        ["git_branch", "TEXT"],
+        ["memory_scope", "TEXT"],
+      ] as const;
+      for (const [col, type] of newColumns) {
+        try {
+          this.db.exec(`ALTER TABLE audit_events ADD COLUMN ${col} ${type}`);
+        } catch {
+          // 列已存在 — 静默忽略（SQLite 不支持 IF NOT EXISTS for ADD COLUMN）
+        }
+      }
+
+      // v0.7.0: 新增索引
+      try {
+        this.db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_events_device ON audit_events(device_id)`,
+        );
+        this.db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_events_branch ON audit_events(git_branch)`,
+        );
+        this.db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_events_scope ON audit_events(memory_scope)`,
+        );
+      } catch {
+        // 静默处理
+      }
+
       // 缓存 prepared statements
       this.stmtInsertEvent = this.db.prepare(`
         INSERT OR IGNORE INTO audit_events (
@@ -197,7 +230,9 @@ export class AnalyticsService {
           search_threshold, search_hit,
           forget_target_id, forget_action, forget_reason,
           elapsed_ms, embedding_ms, qdrant_ms,
-          http_method, http_path, http_status
+          http_method, http_path, http_status,
+          content_full, query_full, error_stack, error_code,
+          device_id, git_branch, memory_scope
         ) VALUES (
           @event_id, @timestamp, @key_prefix, @user_agent, @client_ip,
           @operation, @project, @outcome, @outcome_detail,
@@ -207,7 +242,9 @@ export class AnalyticsService {
           @search_threshold, @search_hit,
           @forget_target_id, @forget_action, @forget_reason,
           @elapsed_ms, @embedding_ms, @qdrant_ms,
-          @http_method, @http_path, @http_status
+          @http_method, @http_path, @http_status,
+          @content_full, @query_full, @error_stack, @error_code,
+          @device_id, @git_branch, @memory_scope
         )
       `);
 
@@ -300,6 +337,14 @@ export class AnalyticsService {
         http_method: entry.http_method,
         http_path: entry.http_path,
         http_status: entry.http_status,
+        // v0.7.0: 新增字段
+        content_full: entry.content_full ?? null,
+        query_full: entry.query_full ?? null,
+        error_stack: entry.error_stack ?? null,
+        error_code: entry.error_code ?? null,
+        device_id: entry.device_id ?? null,
+        git_branch: entry.git_branch ?? null,
+        memory_scope: entry.memory_scope ?? null,
       });
       return true;
     } catch (err: unknown) {
@@ -692,6 +737,18 @@ export class AnalyticsService {
       conditions.push("outcome = @outcome");
       params.outcome = query.outcome;
     }
+    if (query.device_id) {
+      conditions.push("device_id = @device_id");
+      params.device_id = query.device_id;
+    }
+    if (query.git_branch) {
+      conditions.push("git_branch = @git_branch");
+      params.git_branch = query.git_branch;
+    }
+    if (query.memory_scope) {
+      conditions.push("memory_scope = @memory_scope");
+      params.memory_scope = query.memory_scope;
+    }
 
     const whereClause = conditions.join(" AND ");
 
@@ -1051,5 +1108,191 @@ export class AnalyticsService {
          ORDER BY timestamp DESC LIMIT @limit`,
       )
       .all({ ...params, limit }) as AuditLogEntry[];
+  }
+
+  // =====================================================
+  // v0.7.0: 新增分析查询方法
+  // =====================================================
+
+  /**
+   * 记忆增长趋势：按日统计 save 成功数。
+   */
+  getMemoryGrowthTrend(params: {
+    from?: string | undefined;
+    to?: string | undefined;
+    range?: string | undefined;
+    key_prefix_filter?: string[];
+  }): Array<{ date: string; save_count: number }> {
+    if (!this.db) return [];
+    const { from, to } = resolveTimeRange(params);
+    const conditions = [
+      "timestamp >= @from AND timestamp <= @to",
+      "operation = 'memory_save'",
+      "outcome = 'success'",
+    ];
+    const sqlParams: Record<string, unknown> = { from, to };
+
+    if (params.key_prefix_filter?.length) {
+      const placeholders = params.key_prefix_filter
+        .map((_, i) => `@kp${i}`)
+        .join(",");
+      conditions.push(`key_prefix IN (${placeholders})`);
+      params.key_prefix_filter.forEach((kp, i) => (sqlParams[`kp${i}`] = kp));
+    }
+
+    return this.db
+      .prepare(
+        `SELECT DATE(timestamp) as date, COUNT(*) as save_count
+         FROM audit_events
+         WHERE ${conditions.join(" AND ")}
+         GROUP BY DATE(timestamp)
+         ORDER BY date ASC`,
+      )
+      .all(sqlParams) as Array<{ date: string; save_count: number }>;
+  }
+
+  /**
+   * 搜索质量指标趋势：hit_rate / avg_score / avg_result_count 按日。
+   */
+  getSearchQualityMetrics(params: {
+    from?: string | undefined;
+    to?: string | undefined;
+    range?: string | undefined;
+    key_prefix_filter?: string[];
+  }): Array<{
+    date: string;
+    total_searches: number;
+    hit_count: number;
+    hit_rate: number;
+    avg_score: number;
+    avg_result_count: number;
+  }> {
+    if (!this.db) return [];
+    const { from, to } = resolveTimeRange(params);
+    const conditions = [
+      "timestamp >= @from AND timestamp <= @to",
+      "operation = 'memory_search'",
+      "outcome = 'success'",
+    ];
+    const sqlParams: Record<string, unknown> = { from, to };
+
+    if (params.key_prefix_filter?.length) {
+      const placeholders = params.key_prefix_filter
+        .map((_, i) => `@kp${i}`)
+        .join(",");
+      conditions.push(`key_prefix IN (${placeholders})`);
+      params.key_prefix_filter.forEach((kp, i) => (sqlParams[`kp${i}`] = kp));
+    }
+
+    return this.db
+      .prepare(
+        `SELECT 
+          DATE(timestamp) as date,
+          COUNT(*) as total_searches,
+          SUM(CASE WHEN search_hit = 1 THEN 1 ELSE 0 END) as hit_count,
+          ROUND(AVG(CASE WHEN search_hit = 1 THEN 1.0 ELSE 0.0 END), 4) as hit_rate,
+          ROUND(AVG(COALESCE(top_score, 0)), 4) as avg_score,
+          ROUND(AVG(COALESCE(result_count, 0)), 2) as avg_result_count
+         FROM audit_events
+         WHERE ${conditions.join(" AND ")}
+         GROUP BY DATE(timestamp)
+         ORDER BY date ASC`,
+      )
+      .all(sqlParams) as Array<{
+      date: string;
+      total_searches: number;
+      hit_count: number;
+      hit_rate: number;
+      avg_score: number;
+      avg_result_count: number;
+    }>;
+  }
+
+  /**
+   * 性能分位：按操作类型的延迟分位数（avg / p95 / max）。
+   * SQLite 不原生支持 percentile，使用子查询近似。
+   */
+  getPerformanceBreakdown(params: {
+    from?: string | undefined;
+    to?: string | undefined;
+    range?: string | undefined;
+    key_prefix_filter?: string[];
+  }): Array<{
+    operation: string;
+    avg_ms: number;
+    p95_ms: number;
+    max_ms: number;
+    count: number;
+  }> {
+    if (!this.db) return [];
+    const { from, to } = resolveTimeRange(params);
+    const conditions = [
+      "timestamp >= @from AND timestamp <= @to",
+      "elapsed_ms IS NOT NULL",
+    ];
+    const sqlParams: Record<string, unknown> = { from, to };
+
+    if (params.key_prefix_filter?.length) {
+      const placeholders = params.key_prefix_filter
+        .map((_, i) => `@kp${i}`)
+        .join(",");
+      conditions.push(`key_prefix IN (${placeholders})`);
+      params.key_prefix_filter.forEach((kp, i) => (sqlParams[`kp${i}`] = kp));
+    }
+
+    // 先获取每个操作的基础统计
+    const basics = this.db
+      .prepare(
+        `SELECT operation,
+                ROUND(AVG(elapsed_ms), 2) as avg_ms,
+                MAX(elapsed_ms) as max_ms,
+                COUNT(*) as count
+         FROM audit_events
+         WHERE ${conditions.join(" AND ")}
+         GROUP BY operation
+         ORDER BY avg_ms DESC`,
+      )
+      .all(sqlParams) as Array<{
+      operation: string;
+      avg_ms: number;
+      max_ms: number;
+      count: number;
+    }>;
+
+    // 为每个操作计算 P95（使用 window function 取排序后 95% 位置的值）
+    return basics.map((row) => {
+      let p95Ms = row.max_ms;
+      const p95Row = this.db!.prepare(
+        `SELECT elapsed_ms FROM (
+           SELECT elapsed_ms, ROW_NUMBER() OVER (ORDER BY elapsed_ms ASC) as rn,
+                  COUNT(*) OVER () as total
+           FROM audit_events
+           WHERE ${conditions.join(" AND ")} AND operation = @operation
+         ) WHERE rn >= MAX(CAST(total * 0.95 AS INTEGER), 1)
+         LIMIT 1`,
+      ).get({ ...sqlParams, operation: row.operation }) as
+        | { elapsed_ms: number }
+        | undefined;
+      if (p95Row) p95Ms = p95Row.elapsed_ms;
+
+      return {
+        operation: row.operation,
+        avg_ms: row.avg_ms,
+        p95_ms: Math.round(p95Ms * 100) / 100,
+        max_ms: row.max_ms,
+        count: row.count,
+      };
+    });
+  }
+
+  /**
+   * 获取单条审计日志详情（含完整 content_full, error_stack 等）。
+   */
+  getEventById(eventId: string): AuditLogEntry | null {
+    if (!this.db) return null;
+    const row = this.db
+      .prepare(`SELECT * FROM audit_events WHERE event_id = @event_id`)
+      .get({ event_id: eventId }) as AuditLogEntry | undefined;
+    return row ?? null;
   }
 }

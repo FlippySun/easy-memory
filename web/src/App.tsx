@@ -7,6 +7,7 @@ import { ApiKeysPage } from "./pages/ApiKeys";
 import { BansPage } from "./pages/Bans";
 import { AnalyticsPage } from "./pages/Analytics";
 import { AuditLogsPage } from "./pages/AuditLogs";
+import { MemoryBrowserPage } from "./pages/MemoryBrowser";
 import { UsersPage } from "./pages/Users";
 import { SettingsPage } from "./pages/Settings";
 import RegisterPage from "./pages/Register";
@@ -119,6 +120,14 @@ export function App() {
           element={
             <PermissionGuard permission="audit:read">
               <AuditLogsPage />
+            </PermissionGuard>
+          }
+        />
+        <Route
+          path="/memories"
+          element={
+            <PermissionGuard permission="memories:browse">
+              <MemoryBrowserPage />
             </PermissionGuard>
           }
         />

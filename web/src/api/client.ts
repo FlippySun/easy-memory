@@ -306,6 +306,14 @@ export interface AdminAuditLogEntry {
   http_method: string;
   http_path: string;
   http_status: number;
+  // v0.7.0 extended fields
+  device_id?: string;
+  git_branch?: string;
+  memory_scope?: string;
+  content_full?: string;
+  query_full?: string;
+  error_stack?: string;
+  error_code?: string;
 }
 
 export interface AdminAuditLogsResponse {
@@ -398,6 +406,41 @@ export const adminApi = {
       `/admin/audit/logs${params ? `?${params}` : ""}`,
       options,
     ),
+  // v0.7.0: Audit Event Detail
+  getAuditEventDetail: (eventId: string, options?: RequestInit) =>
+    api.get<{ data: AdminAuditLogEntry }>(
+      `/admin/audit/events/${eventId}`,
+      options,
+    ),
+
+  // v0.7.0: Enhanced Analytics
+  getMemoryGrowth: (params?: string, options?: RequestInit) =>
+    api.get<{
+      data: Array<{ date: string; save_count: number }>;
+      total: number;
+    }>(`/admin/analytics/memory-growth${params ? `?${params}` : ""}`, options),
+  getSearchQuality: (params?: string, options?: RequestInit) =>
+    api.get<{
+      data: Array<{
+        date: string;
+        total_searches: number;
+        hit_count: number;
+        hit_rate: number;
+        avg_score: number;
+        avg_result_count: number;
+      }>;
+    }>(`/admin/analytics/search-quality${params ? `?${params}` : ""}`, options),
+  getPerformance: (params?: string, options?: RequestInit) =>
+    api.get<{
+      data: Array<{
+        operation: string;
+        avg_ms: number;
+        p95_ms: number;
+        max_ms: number;
+        count: number;
+      }>;
+      total: number;
+    }>(`/admin/analytics/performance${params ? `?${params}` : ""}`, options),
 
   // Config
   getConfig: () => api.get<Record<string, unknown>>("/admin/config"),
@@ -444,4 +487,67 @@ export const userKeysApi = {
     api.post<UserKeyCreateResponse>("/user/keys", { name }),
   /** 吊销 API Key */
   revoke: (id: string) => api.delete<{ success: boolean }>(`/user/keys/${id}`),
+};
+
+// =====================================================================
+// Memory Browser API (v0.7.0)
+// =====================================================================
+
+export interface MemoryRecord {
+  id: string;
+  content: string;
+  project: string;
+  fact_type: string;
+  tags: string[];
+  source: string;
+  confidence: number;
+  lifecycle: string;
+  created_at: string;
+  updated_at: string;
+  memory_scope: string;
+  memory_type: string;
+  weight: number;
+  device_id?: string;
+  git_branch?: string;
+  owner_key_prefix?: string;
+  source_file?: string;
+}
+
+export interface MemoryBrowseResponse {
+  ok: boolean;
+  project: string;
+  memories: MemoryRecord[];
+  next_offset: string | null;
+}
+
+export interface MemoryStatsResponse {
+  ok: boolean;
+  total_memories: number;
+  total_projects: number;
+  collections: Array<{ name: string; project: string; points_count: number }>;
+}
+
+export interface MemoryPatchBody {
+  lifecycle?: string;
+  weight?: number;
+  tags?: string[];
+  memory_scope?: string;
+  memory_type?: string;
+}
+
+export const memoryApi = {
+  /** 浏览记忆列表 */
+  browse: (params?: string, options?: RequestInit) =>
+    api.get<MemoryBrowseResponse>(
+      `/memories${params ? `?${params}` : ""}`,
+      options,
+    ),
+  /** 获取所有 collection 统计 */
+  stats: () => api.get<MemoryStatsResponse>("/memories/stats"),
+  /** 更新记忆属性 (lifecycle, weight, tags 等) */
+  patch: (project: string, id: string, body: MemoryPatchBody) =>
+    api.patch<{ ok: boolean; updated: string[] }>(
+      `/memories/${encodeURIComponent(project)}/${encodeURIComponent(id)}`,
+      body,
+    ),
 };

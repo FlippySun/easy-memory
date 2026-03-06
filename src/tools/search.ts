@@ -19,6 +19,8 @@ import {
   type FactType,
   type Lifecycle,
   type MemorySource,
+  type MemoryScope,
+  type MemoryType,
 } from "../types/schema.js";
 
 import * as z from "zod/v4";
@@ -29,6 +31,8 @@ export interface SearchHandlerDeps {
   /** [ADR 补充二十] BM25 稀疏编码器 — 可选，缺失时降级为纯 dense 检索 */
   bm25?: BM25Encoder;
   defaultProject: string;
+  /** Web UI: 调用者 API Key 前缀，用于数据隔离过滤 */
+  callerKeyPrefix?: string;
 }
 
 // D4-4: CORE_SCHEMA 规定 system_note 使用中文
@@ -122,6 +126,37 @@ export async function handleSearch(
     }
   }
 
+  // Web UI: 记忆作用域过滤 — global 始终可见，project 仅本项目，branch 需匹配 git_branch
+  if (input.memory_scope) {
+    mustConditions.push({
+      key: "memory_scope",
+      match: { value: input.memory_scope },
+    });
+  } else {
+    // 默认检索：global + project 作用域的记忆
+    // branch 作用域的记忆必须显式指定才返回
+    mustConditions.push({
+      key: "memory_scope",
+      match: { any: ["global", "project"] },
+    });
+  }
+
+  // Web UI: device_id 精确过滤
+  if (input.device_id) {
+    mustConditions.push({
+      key: "device_id",
+      match: { value: input.device_id },
+    });
+  }
+
+  // Web UI: git_branch 精确过滤
+  if (input.git_branch) {
+    mustConditions.push({
+      key: "git_branch",
+      match: { value: input.git_branch },
+    });
+  }
+
   if (mustConditions.length > 0) {
     filter.must = mustConditions;
   }
@@ -146,23 +181,48 @@ export async function handleSearch(
   );
 
   // Step 4: 组装输出（boundary markers 包裹 content）
-  const memories: MemorySearchResult[] = results.map((r) => ({
-    id: r.id,
-    content: `[MEMORY_CONTENT_START]\n${String(r.payload.content ?? "")}\n[MEMORY_CONTENT_END]`,
-    score: r.score,
-    fact_type: (r.payload.fact_type as FactType) ?? "observation",
-    tags: (r.payload.tags as string[]) ?? [],
-    source: (r.payload.source as MemorySource) ?? "conversation",
-    confidence: (r.payload.confidence as number) ?? 0.7,
-    lifecycle: (r.payload.lifecycle as Lifecycle) ?? "active",
-    created_at: (r.payload.created_at as string) ?? "",
-    ...(r.payload.source_file
-      ? { source_file: String(r.payload.source_file) }
-      : {}),
-    ...(r.payload.source_line
-      ? { source_line: Number(r.payload.source_line) }
-      : {}),
-  }));
+  const memories: MemorySearchResult[] = results.map((r) => {
+    // Web UI: weight 加权 — 将 Qdrant 返回 score 乘以 weight 进行重排序
+    const weight =
+      typeof r.payload.weight === "number" ? r.payload.weight : 1.0;
+    const weightedScore = r.score * weight;
+    return {
+      id: r.id,
+      content: `[MEMORY_CONTENT_START]\n${String(r.payload.content ?? "")}\n[MEMORY_CONTENT_END]`,
+      score: weightedScore,
+      fact_type: (r.payload.fact_type as FactType) ?? "observation",
+      tags: (r.payload.tags as string[]) ?? [],
+      source: (r.payload.source as MemorySource) ?? "conversation",
+      confidence: (r.payload.confidence as number) ?? 0.7,
+      lifecycle: (r.payload.lifecycle as Lifecycle) ?? "active",
+      created_at: (r.payload.created_at as string) ?? "",
+      ...(r.payload.source_file
+        ? { source_file: String(r.payload.source_file) }
+        : {}),
+      ...(r.payload.source_line
+        ? { source_line: Number(r.payload.source_line) }
+        : {}),
+      // Web UI: 新增层级隔离字段
+      ...(r.payload.memory_scope
+        ? { memory_scope: r.payload.memory_scope as MemoryScope }
+        : {}),
+      ...(r.payload.memory_type
+        ? { memory_type: r.payload.memory_type as MemoryType }
+        : {}),
+      ...(typeof r.payload.weight === "number"
+        ? { weight: r.payload.weight }
+        : {}),
+      ...(r.payload.device_id
+        ? { device_id: String(r.payload.device_id) }
+        : {}),
+      ...(r.payload.git_branch
+        ? { git_branch: String(r.payload.git_branch) }
+        : {}),
+    };
+  });
+
+  // Web UI: 按 weighted score 重新排序（降序）
+  memories.sort((a, b) => b.score - a.score);
 
   log.info("Memory search completed", {
     project,

@@ -161,6 +161,8 @@ export function registerTools(
     bm25: container.bm25,
     defaultProject,
     rateLimiter,
+    // v0.7.0: 数据归属隔离
+    callerKeyPrefix: auditContext.keyPrefix ?? "",
   };
 
   const recordAudit = ({
@@ -266,6 +268,29 @@ ATOMICITY: When correcting outdated information, ALWAYS save the new version fir
         .array(z.string())
         .optional()
         .describe("Related memory IDs"),
+      // v0.7.0: 记忆层级隔离字段
+      device_id: z
+        .string()
+        .optional()
+        .describe("Device identifier for cross-device memory isolation"),
+      git_branch: z
+        .string()
+        .optional()
+        .describe("Git branch name for branch-scoped memories"),
+      memory_scope: z
+        .enum(["global", "project", "branch"])
+        .optional()
+        .describe("Memory visibility scope (default: project)"),
+      memory_type: z
+        .enum(["long_term", "short_term"])
+        .optional()
+        .describe("Memory persistence type (default: long_term)"),
+      weight: z
+        .number()
+        .min(0)
+        .max(10)
+        .optional()
+        .describe("Importance weight for search ranking (default: 1.0)"),
     },
     async (args) => {
       const startedAt = Date.now();
@@ -390,6 +415,13 @@ COLD START: One initial broad search returning empty is normal for new projects.
         .optional()
         .describe("Include outdated memories"),
       tags: z.array(z.string()).optional().describe("Filter by tags"),
+      // v0.7.0: 记忆层级隔离过滤
+      memory_scope: z
+        .enum(["global", "project", "branch"])
+        .optional()
+        .describe("Filter by memory scope"),
+      device_id: z.string().optional().describe("Filter by device identifier"),
+      git_branch: z.string().optional().describe("Filter by git branch"),
     },
     async (args) => {
       const startedAt = Date.now();

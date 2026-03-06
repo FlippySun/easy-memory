@@ -451,6 +451,89 @@ export class QdrantService {
   }
 
   /**
+   * v0.7.0: 分页浏览记忆点 — 用于 Memory Browser。
+   * 使用 Qdrant scroll API，支持 offset-based 分页和过滤。
+   */
+  async scrollPoints(
+    project: string,
+    options: {
+      limit?: number;
+      offset?: string | null;
+      filter?: Record<string, unknown>;
+      withVector?: boolean;
+    } = {},
+  ): Promise<{
+    points: Array<{ id: string; payload: Record<string, unknown> }>;
+    next_offset: string | null;
+  }> {
+    const name = await this.ensureCollection(project);
+    const { limit = 20, offset = null, filter, withVector = false } = options;
+
+    const scrollRequest: Record<string, unknown> = {
+      limit,
+      with_payload: true,
+      with_vector: withVector,
+    };
+    if (offset) {
+      scrollRequest.offset = offset;
+    }
+    if (filter) {
+      scrollRequest.filter = filter;
+    }
+
+    const result = await this.client.scroll(name, scrollRequest);
+
+    const points = (result.points ?? []).map((p) => ({
+      id: String(p.id),
+      payload: (p.payload as Record<string, unknown>) ?? {},
+    }));
+
+    const nextOffset = result.next_page_offset
+      ? String(result.next_page_offset)
+      : null;
+
+    return { points, next_offset: nextOffset };
+  }
+
+  /**
+   * v0.7.0: 列出所有 em_* Collection 及各自的 points_count。
+   * 用于 Memory Browser 存储分布统计和项目列表。
+   */
+  async listAllCollections(): Promise<
+    Array<{ name: string; project: string; points_count: number }>
+  > {
+    const collectionsResponse = await this.client.getCollections();
+    const collections = collectionsResponse.collections ?? [];
+
+    const emCollections = collections.filter((c) => c.name.startsWith("em_"));
+
+    const results: Array<{
+      name: string;
+      project: string;
+      points_count: number;
+    }> = [];
+    for (const col of emCollections) {
+      try {
+        const info = await this.client.getCollection(col.name);
+        results.push({
+          name: col.name,
+          project: col.name.replace(/^em_/, ""),
+          points_count: info.points_count ?? 0,
+        });
+      } catch {
+        // collection might have been deleted concurrently
+        results.push({
+          name: col.name,
+          project: col.name.replace(/^em_/, ""),
+          points_count: 0,
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * D3-6: 清理资源。Qdrant REST 客户端无长连接需关闭，
    * 但清空已初始化集合缓存以防再次使用时出现过时状态。
    */

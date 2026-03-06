@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-03-06
+
+### Added
+
+- **[Web] Analytics 增强**: 新增 Memory Growth 趋势图、Search Quality 指标面板、Performance Breakdown 柱状图（Avg/P95/Max 三维分析）
+- **[Web] Audit Logs 增强**: 新增 device_id、git_branch、memory_scope 三个过滤维度 + 事件详情抽屉
+- **[Web] Memory Browser 页面**: 全新记忆浏览页面，支持卡片/表格双视图、多维过滤（project/scope/type/lifecycle/device/branch/tag）、分页、编辑、归档
+- **[API] Memory Browser API**: `GET /api/memories` 浏览 + `GET /api/memories/stats` 统计 + `PATCH /api/memories/:project/:id` 更新
+- **[API] Enhanced Analytics API**: `GET /api/admin/analytics/memory-growth` + `search-quality` + `performance` + Audit Event Detail
+- **[Security] 用户数据隔离**: `createUserScopeMiddleware` 实现 — 非 admin 用户仅可见/修改自己 API Key 创建的记忆
+- **[Security] adminOrUserAuth 上下文注入**: JWT 认证成功后注入 `authUserId` / `authUserRole` 供下游中间件使用
+
+### Fixed
+
+- **[Critical] SQL operation name mismatch**: `analytics.ts` 中 `getMemoryGrowthTrend` 和 `getSearchQualityMetrics` 的 SQL 查询使用 `'save'`/`'search'` 但审计日志记录的是 `'memory_save'`/`'memory_search'`
+- **[Critical] Performance 类型不匹配**: 前端使用 `avg_elapsed_ms`/`avg_embedding_ms`/`avg_qdrant_ms` 但后端返回 `avg_ms`/`p95_ms`/`max_ms`
+- **[Critical] Enum 值不匹配**: MemoryBrowser/AuditLogs 的 memory_type（fact/preference/snippet → long_term/short_term）和 memory_scope（session/user → branch）下拉值与后端 Zod schema 不一致
+- **[Critical] bearerAuth 阻断 Cookie JWT**: `/api/memories` 路由被 bearerAuth 拦截导致 Web UI 认证失败
+- **[Critical] AbortSignal 未传递**: MemoryBrowser 的 browse() 调用创建了 AbortController 但未将 signal 传入 fetch
+- **[Critical] Race condition**: AuditLogs handleRowClick 缺少 AbortController 导致快速点击竞态
+- **[Bug] queryEvents 过滤条件缺失**: `analytics.ts` 的 `queryEvents()` 方法未将 `device_id`、`git_branch`、`memory_scope` 参数加入 SQL WHERE 子句，导致审计日志过滤无效
+- **[Bug] 表格视图编辑失效**: MemoryBrowser 表格视图点击 Edit 按钮无反应 — 编辑表单仅在卡片视图渲染，`startEdit()` 添加自动视图切换逻辑
+- **[Bug] 非管理员用户无法访问 Analytics/Audit**: `/api/admin/*` 统一使用 `adminAuth` 中间件阻断 user 角色，改为路由感知调度器 — analytics/audit 路径使用 `adminOrUserAuth` 支持权限检查
+
+### Changed
+
+- **[Frontend] patchLoading → patchingIds**: 从单布尔值改为 `Set<string>` 按 ID 跟踪，防止并发修改冲突
+- **[Frontend] handleArchive/saveEdit**: 添加 await + 错误反馈，修复 fire-and-forget 问题
+- **[Security] CSV 导出防注入**: 所有 CSV 字段统一使用 `csvEscape()` 双引号包裹，防御公式注入
+- **[Security] 错误信息脱敏**: memory-routes 的 catch 块移除 `detail: msg` 字段，不再泄露 Qdrant 内部信息
+- **[Frontend] MemoryBrowser**: weight 输入上限从 1 修正为 10，lifecycle 过滤新增 deprecated 选项
+
+### Tests
+
+- **所有测试通过**: 36 文件, 870 用例, tsc --noEmit clean, vite build clean
+
 ## [0.5.3] - 2026-03-06
 
 ### Fixed
@@ -27,8 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **新增 MCP 服务测试** (`tests/mcp/server.test.ts`, `tests/mcp/remote-server.test.ts`): 单元测试 MCP 工具调用、审计链路、代理模式转发。
 - **审计分页边界测试** (`tests/audit-analytics-comprehensive.test.ts`): 新增 `page_size=101→400` 边界用例及大量场景覆盖扩充。
 - **总计: 36 文件, 869 测试用例全部通过**
-
-
 
 ### Added
 

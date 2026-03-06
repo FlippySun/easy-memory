@@ -150,6 +150,8 @@ export interface SaveHandlerDeps {
   defaultProject: string;
   /** D3-5: 嵌入模型名称，避免硬编码 */
   embeddingModel?: string;
+  /** Web UI: 调用者 API Key 前缀，用于数据隔离归属 */
+  callerKeyPrefix?: string;
 }
 
 /**
@@ -318,6 +320,13 @@ export async function handleSave(
       related_ids: input.related_ids ?? [],
       ...(input.source_file ? { source_file: input.source_file } : {}),
       ...(input.source_line ? { source_line: input.source_line } : {}),
+      // Web UI: 记忆层级隔离字段
+      memory_scope: input.memory_scope ?? "project",
+      memory_type: input.memory_type ?? "long_term",
+      weight: input.weight ?? 1.0,
+      ...(input.device_id ? { device_id: input.device_id } : {}),
+      ...(input.git_branch ? { git_branch: input.git_branch } : {}),
+      owner_key_prefix: deps.callerKeyPrefix ?? "",
     };
 
     await deps.qdrant.upsert(project, [

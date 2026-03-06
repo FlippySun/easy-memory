@@ -40,7 +40,8 @@ import {
 import { createAdminRoutes } from "./admin-routes.js";
 import { createAuthRoutes } from "./auth-routes.js";
 import { createUserKeyRoutes } from "./user-key-routes.js";
-import { adminAuth } from "./admin-auth.js";
+import { adminAuth, adminOrUserAuth } from "./admin-auth.js";
+import { createMemoryRoutes } from "./memory-routes.js";
 import type { AuditOperation, AuditOutcome } from "../types/audit-schema.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -233,7 +234,7 @@ function createApp(container: AppContainer): Hono<Env> {
     return transport.handleRequest(c.req.raw);
   });
 
-  // ===== Admin Routes — ADMIN_TOKEN + JWT admin 双路径认证 (C2 FIX) =====
+  // ===== Admin Routes — 分层认证: analytics/audit 允许拥有权限的 user, 其余 admin-only =====
   const adminRoutes = createAdminRoutes({
     analytics: container.analytics,
     audit: container.audit,
@@ -241,8 +242,34 @@ function createApp(container: AppContainer): Hono<Env> {
     banManager: container.banManager,
     runtimeConfig: container.runtimeConfig,
   });
-  app.use("/api/admin/*", adminAuth(config.adminToken, container.auth));
+  // analytics/audit 路由允许拥有对应权限的普通用户访问 (v0.7.0)
+  const analyticsAuth = adminOrUserAuth(
+    config.adminToken,
+    container.auth,
+    "analytics:read",
+  );
+  const auditAuth = adminOrUserAuth(
+    config.adminToken,
+    container.auth,
+    "audit:read",
+  );
+  const defaultAdminAuth = adminAuth(config.adminToken, container.auth);
+  app.use("/api/admin/*", async (c, next) => {
+    const path = c.req.path;
+    if (path.startsWith("/api/admin/analytics")) return analyticsAuth(c, next);
+    if (path.startsWith("/api/admin/audit")) return auditAuth(c, next);
+    return defaultAdminAuth(c, next);
+  });
   app.route("/api/admin", adminRoutes);
+
+  // ===== Memory Browser Routes — JWT admin/user (权限: memories:browse) (v0.7.0) =====
+  const memoryRoutes = createMemoryRoutes({
+    qdrant: container.qdrant,
+    apiKeyManager: container.apiKeyManager,
+    authService: container.auth,
+    adminToken: config.adminToken,
+  });
+  app.route("/api/memories", memoryRoutes);
 
   // 鉴权: 除 /health 和 /api/admin/* 外所有路由需要 Bearer Token
   // 采用双层鉴权: Master Token (直通) 或 Managed API Key (含 per-key ban + rate limit)
@@ -267,6 +294,11 @@ function createApp(container: AppContainer): Hono<Env> {
     }
     // User Key 路由使用 JWT auth，跳过 bearerAuth
     if (c.req.path.startsWith("/api/user")) {
+      await next();
+      return;
+    }
+    // Memory routes 使用 adminOrUserAuth (JWT)，跳过 bearerAuth
+    if (c.req.path.startsWith("/api/memories")) {
       await next();
       return;
     }
@@ -563,7 +595,13 @@ function createApp(container: AppContainer): Hono<Env> {
         400,
       );
     }
-    const result = await handleSave(parsed.data, deps);
+    // v0.7.0: 注入 callerKeyPrefix 用于数据归属隔离
+    const apiKeyRecord = c.get("apiKeyRecord");
+    const saveDeps = {
+      ...deps,
+      callerKeyPrefix: apiKeyRecord?.prefix ?? "",
+    };
+    const result = await handleSave(parsed.data, saveDeps);
     return c.json(result);
   });
 
@@ -577,7 +615,13 @@ function createApp(container: AppContainer): Hono<Env> {
         400,
       );
     }
-    const result = await handleSearch(parsed.data, deps);
+    // v0.7.0: 注入 callerKeyPrefix
+    const apiKeyRecord = c.get("apiKeyRecord");
+    const searchDeps = {
+      ...deps,
+      callerKeyPrefix: apiKeyRecord?.prefix ?? "",
+    };
+    const result = await handleSearch(parsed.data, searchDeps);
     return c.json(result);
   });
 

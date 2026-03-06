@@ -57,6 +57,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly string[]> = {
     "memory:status",
     // User self-service API Key
     "keys:self",
+    // v0.7.0: Memory Browser
+    "memories:browse",
   ],
   user: [
     "memory:save",
@@ -65,6 +67,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly string[]> = {
     "memory:status",
     // 用户自助 API Key 管理
     "keys:self",
+    // v0.7.0: 用户级可视化权限（仅看自己的数据）
+    "analytics:read",
+    "audit:read",
+    "memories:browse",
   ],
 } as const;
 

@@ -146,6 +146,29 @@ export async function createRemoteMcpServer(
         .record(z.string(), z.any())
         .optional()
         .describe("Additional structured metadata."),
+      // v0.7.0: 记忆层级隔离字段
+      device_id: z
+        .string()
+        .optional()
+        .describe("Device identifier for cross-device memory isolation."),
+      git_branch: z
+        .string()
+        .optional()
+        .describe("Git branch name for branch-scoped memories."),
+      memory_scope: z
+        .enum(["global", "project", "branch"])
+        .optional()
+        .describe("Memory visibility scope (default: project)."),
+      memory_type: z
+        .enum(["long_term", "short_term"])
+        .optional()
+        .describe("Memory persistence type (default: long_term)."),
+      weight: z
+        .number()
+        .min(0)
+        .max(10)
+        .optional()
+        .describe("Importance weight for search ranking (default: 1.0)."),
     },
     async (args) => {
       try {
@@ -190,6 +213,13 @@ export async function createRemoteMcpServer(
         .describe("Minimum relevance score (0-1, default: 0.3)."),
       tags: z.array(z.string()).optional().describe("Filter by tags."),
       category: z.string().optional().describe("Filter by category."),
+      // v0.7.0: 记忆层级隔离过滤
+      memory_scope: z
+        .enum(["global", "project", "branch"])
+        .optional()
+        .describe("Filter by memory scope."),
+      device_id: z.string().optional().describe("Filter by device identifier."),
+      git_branch: z.string().optional().describe("Filter by git branch."),
     },
     async (args) => {
       try {

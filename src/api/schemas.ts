@@ -13,7 +13,12 @@
  */
 
 import { z } from "zod/v4";
-import { SOURCE_ENUM, FACT_TYPE_ENUM } from "../types/schema.js";
+import {
+  SOURCE_ENUM,
+  FACT_TYPE_ENUM,
+  MEMORY_SCOPE_ENUM,
+  MEMORY_TYPE_ENUM,
+} from "../types/schema.js";
 
 // =========================================================================
 // HTTP Save Input — 剥离未知字段 (defense-in-depth)
@@ -30,6 +35,12 @@ export const HttpSaveInputSchema = z
     source_file: z.string().optional(),
     source_line: z.number().int().positive().optional(),
     related_ids: z.array(z.string()).optional(),
+    // v0.7.0: 记忆层级隔离 & 权重
+    device_id: z.string().max(128).optional(),
+    git_branch: z.string().max(256).optional(),
+    memory_scope: z.enum(MEMORY_SCOPE_ENUM).optional(),
+    memory_type: z.enum(MEMORY_TYPE_ENUM).optional(),
+    weight: z.number().min(0).max(10).optional(),
   })
   .strip();
 
@@ -47,6 +58,10 @@ export const HttpSearchInputSchema = z
     threshold: z.number().min(0).max(1).optional(),
     include_outdated: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
+    // v0.7.0: 层级过滤
+    device_id: z.string().optional(),
+    git_branch: z.string().optional(),
+    memory_scope: z.enum(MEMORY_SCOPE_ENUM).optional(),
   })
   .strip();
 

@@ -519,6 +519,9 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       "range",
       "page",
       "page_size",
+      "device_id",
+      "git_branch",
+      "memory_scope",
     ]);
 
     const parsed = AuditQuerySchema.safeParse(rawQuery);
@@ -545,6 +548,9 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       "range",
       "page",
       "page_size",
+      "device_id",
+      "git_branch",
+      "memory_scope",
     ]);
 
     const parsed = AuditQuerySchema.safeParse(rawQuery);
@@ -557,6 +563,11 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     const dateStr = new Date().toISOString().slice(0, 10);
 
     if (format === "csv") {
+      // CSV formula injection 防御: 所有单元格用双引号包裹，内嵌双引号转义
+      const csvEscape = (v: unknown): string => {
+        const s = String(v ?? "");
+        return `"${s.replace(/"/g, '""')}"`;
+      };
       const csvHeader = [
         "event_id",
         "timestamp",
@@ -573,17 +584,17 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
 
       const csvRows = events.map((e) =>
         [
-          e.event_id,
-          e.timestamp,
-          e.key_prefix,
-          e.operation,
-          e.project,
-          e.outcome,
-          `"${(e.outcome_detail ?? "").replace(/"/g, '""')}"`,
-          e.elapsed_ms,
-          e.http_status,
-          e.client_ip,
-          `"${(e.user_agent ?? "").replace(/"/g, '""')}"`,
+          csvEscape(e.event_id),
+          csvEscape(e.timestamp),
+          csvEscape(e.key_prefix),
+          csvEscape(e.operation),
+          csvEscape(e.project),
+          csvEscape(e.outcome),
+          csvEscape(e.outcome_detail),
+          csvEscape(e.elapsed_ms),
+          csvEscape(e.http_status),
+          csvEscape(e.client_ip),
+          csvEscape(e.user_agent),
         ].join(","),
       );
 
@@ -607,6 +618,73 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     }
 
     return c.json({ data: events, total: events.length });
+  });
+
+  // =====================================================================
+  // v0.7.0: 新增分析端点 — Memory Growth / Search Quality / Performance
+  // =====================================================================
+
+  // GET /api/admin/analytics/memory-growth — 记忆增长趋势
+  admin.get("/analytics/memory-growth", (c) => {
+    const rawQuery = extractQueryParams(c, ["from", "to", "range"]);
+    const parsed = TimeRangeQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid query parameters" }, 400);
+    }
+
+    const result = analytics.getMemoryGrowthTrend({
+      from: parsed.data.from,
+      to: parsed.data.to,
+      range: parsed.data.range,
+    });
+    return c.json({ data: result, total: result.length });
+  });
+
+  // GET /api/admin/analytics/search-quality — 搜索质量指标
+  admin.get("/analytics/search-quality", (c) => {
+    const rawQuery = extractQueryParams(c, ["from", "to", "range", "project"]);
+    const parsed = TimeRangeQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid query parameters" }, 400);
+    }
+
+    const result = analytics.getSearchQualityMetrics({
+      from: parsed.data.from,
+      to: parsed.data.to,
+      range: parsed.data.range,
+    });
+    return c.json({ data: result });
+  });
+
+  // GET /api/admin/analytics/performance — 性能分解
+  admin.get("/analytics/performance", (c) => {
+    const rawQuery = extractQueryParams(c, ["from", "to", "range", "project"]);
+    const parsed = TimeRangeQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid query parameters" }, 400);
+    }
+
+    const result = analytics.getPerformanceBreakdown({
+      from: parsed.data.from,
+      to: parsed.data.to,
+      range: parsed.data.range,
+    });
+    return c.json({ data: result, total: result.length });
+  });
+
+  // GET /api/admin/audit/events/:eventId — 审计事件详情
+  admin.get("/audit/events/:eventId", (c) => {
+    const eventId = c.req.param("eventId");
+    if (!eventId) {
+      return c.json({ error: "Missing event ID" }, 400);
+    }
+
+    const event = analytics.getEventById(eventId);
+    if (!event) {
+      return c.json({ error: "Event not found" }, 404);
+    }
+
+    return c.json({ data: event });
   });
 
   // =====================================================================
@@ -735,6 +813,10 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     const format = c.req.query("format") ?? "json";
     const events = analytics.exportEvents(parsed.data);
     if (format === "csv") {
+      const csvEscape = (v: unknown): string => {
+        const s = String(v ?? "");
+        return `"${s.replace(/"/g, '""')}"`;
+      };
       const csvHeader = [
         "event_id",
         "timestamp",
@@ -750,17 +832,17 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       ].join(",");
       const csvRows = events.map((e) =>
         [
-          e.event_id,
-          e.timestamp,
-          e.key_prefix,
-          e.operation,
-          e.project,
-          e.outcome,
-          `"${(e.outcome_detail ?? "").replace(/"/g, '""')}"`,
-          e.elapsed_ms,
-          e.http_status,
-          e.client_ip,
-          `"${(e.user_agent ?? "").replace(/"/g, '""')}"`,
+          csvEscape(e.event_id),
+          csvEscape(e.timestamp),
+          csvEscape(e.key_prefix),
+          csvEscape(e.operation),
+          csvEscape(e.project),
+          csvEscape(e.outcome),
+          csvEscape(e.outcome_detail),
+          csvEscape(e.elapsed_ms),
+          csvEscape(e.http_status),
+          csvEscape(e.client_ip),
+          csvEscape(e.user_agent),
         ].join(","),
       );
       const csv = [csvHeader, ...csvRows].join("\n");

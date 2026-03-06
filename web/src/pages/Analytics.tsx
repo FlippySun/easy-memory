@@ -14,13 +14,45 @@ import {
   AlertCircle,
   Zap,
   Activity,
+  Database,
+  Search,
+  Timer,
 } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from "recharts";
 
 interface AnalyticsData {
   overview: AdminOverviewResponse | null;
   timeline: { data: AdminTimelinePoint[]; total: number } | null;
   operations: { data: AdminOperationDistribution[]; total: number } | null;
   errors: AdminErrorRateResponse | null;
+  // v0.7.0
+  memoryGrowth: Array<{ date: string; save_count: number }> | null;
+  searchQuality: Array<{
+    date: string;
+    total_searches: number;
+    hit_count: number;
+    hit_rate: number;
+    avg_score: number;
+    avg_result_count: number;
+  }> | null;
+  performance: Array<{
+    operation: string;
+    avg_ms: number;
+    p95_ms: number;
+    max_ms: number;
+    count: number;
+  }> | null;
 }
 
 export function AnalyticsPage() {
@@ -29,6 +61,9 @@ export function AnalyticsPage() {
     timeline: null,
     operations: null,
     errors: null,
+    memoryGrowth: null,
+    searchQuality: null,
+    performance: null,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,15 +80,40 @@ export function AnalyticsPage() {
     setError(null);
     try {
       const param = `range=${encodeURIComponent(timeRange)}`;
-      const [overview, timeline, operations, errors] = await Promise.all([
+      const [
+        overview,
+        timeline,
+        operations,
+        errors,
+        memGrowth,
+        searchQual,
+        perf,
+      ] = await Promise.all([
         adminApi.getOverview(param, { signal: controller.signal }),
         adminApi.getTimeline(param, { signal: controller.signal }),
         adminApi.getOperations(param, { signal: controller.signal }),
         adminApi.getErrors(param, { signal: controller.signal }),
+        adminApi
+          .getMemoryGrowth(param, { signal: controller.signal })
+          .catch(() => null),
+        adminApi
+          .getSearchQuality(param, { signal: controller.signal })
+          .catch(() => null),
+        adminApi
+          .getPerformance(param, { signal: controller.signal })
+          .catch(() => null),
       ]);
       // 仅在未被中止时更新状态
       if (!controller.signal.aborted) {
-        setData({ overview, timeline, operations, errors });
+        setData({
+          overview,
+          timeline,
+          operations,
+          errors,
+          memoryGrowth: memGrowth?.data ?? null,
+          searchQuality: searchQual?.data ?? null,
+          performance: perf?.data ?? null,
+        });
       }
     } catch (err) {
       if (!controller.signal.aborted) {
@@ -282,6 +342,131 @@ export function AnalyticsPage() {
                   </div>
                 ))}
               </div>
+            </Card>
+          )}
+
+          {/* v0.7.0: Memory Growth Trend */}
+          {data.memoryGrowth && data.memoryGrowth.length > 0 && (
+            <Card>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 rounded-lg bg-purple-50 text-purple-600">
+                  <Database size={20} />
+                </div>
+                <h3 className="font-semibold text-slate-900">
+                  Memory Growth Trend
+                </h3>
+              </div>
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={data.memoryGrowth}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 12 }}
+                    stroke="#94a3b8"
+                  />
+                  <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 8,
+                      border: "1px solid #e2e8f0",
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="save_count"
+                    name="Saved Memories"
+                    stroke="#8b5cf6"
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* v0.7.0: Search Quality Metrics */}
+          {data.searchQuality && data.searchQuality.length > 0 && (
+            <Card>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 rounded-lg bg-cyan-50 text-cyan-600">
+                  <Search size={20} />
+                </div>
+                <h3 className="font-semibold text-slate-900">Search Quality</h3>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                <div className="text-center p-3 bg-slate-50 rounded-lg">
+                  <p className="text-2xl font-bold text-slate-900">
+                    {Math.round(data.searchQuality[0].hit_rate * 100)}%
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">Hit Rate</p>
+                </div>
+                <div className="text-center p-3 bg-slate-50 rounded-lg">
+                  <p className="text-2xl font-bold text-slate-900">
+                    {data.searchQuality[0].avg_score.toFixed(3)}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">Avg Score</p>
+                </div>
+                <div className="text-center p-3 bg-slate-50 rounded-lg">
+                  <p className="text-2xl font-bold text-slate-900">
+                    {data.searchQuality[0].avg_result_count.toFixed(1)}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">Avg Results</p>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* v0.7.0: Performance Breakdown */}
+          {data.performance && data.performance.length > 0 && (
+            <Card>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 rounded-lg bg-amber-50 text-amber-600">
+                  <Timer size={20} />
+                </div>
+                <h3 className="font-semibold text-slate-900">
+                  Performance Breakdown
+                </h3>
+              </div>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={data.performance}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="operation"
+                    tick={{ fontSize: 12 }}
+                    stroke="#94a3b8"
+                  />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    stroke="#94a3b8"
+                    label={{ value: "ms", angle: -90, position: "insideLeft" }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 8,
+                      border: "1px solid #e2e8f0",
+                    }}
+                  />
+                  <Legend />
+                  <Bar
+                    dataKey="avg_ms"
+                    name="Avg (ms)"
+                    fill="#f59e0b"
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="p95_ms"
+                    name="P95 (ms)"
+                    fill="#06b6d4"
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar
+                    dataKey="max_ms"
+                    name="Max (ms)"
+                    fill="#ef4444"
+                    radius={[4, 4, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
             </Card>
           )}
         </>

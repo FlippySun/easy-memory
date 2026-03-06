@@ -15,6 +15,7 @@ import {
   X,
   Brain,
   ChevronDown,
+  Database,
 } from "lucide-react";
 
 interface NavItem {
@@ -55,6 +56,12 @@ const navItems: NavItem[] = [
     label: "Audit Logs",
     icon: <ScrollText size={20} />,
     permission: "audit:read",
+  },
+  {
+    to: "/memories",
+    label: "Memories",
+    icon: <Database size={20} />,
+    permission: "memories:browse",
   },
   {
     to: "/users",

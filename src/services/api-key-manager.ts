@@ -225,6 +225,21 @@ export class ApiKeyManager {
   }
 
   /**
+   * v0.7.0: 获取用户关联的所有活跃 API Key 前缀。
+   * 用于 userScopeMiddleware 的数据权限隔离。
+   */
+  getKeyPrefixesByUserId(userId: number): string[] {
+    if (!this.db) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT prefix FROM api_keys
+         WHERE user_id = ? AND revoked_at IS NULL AND soft_deleted_at IS NULL`,
+      )
+      .all(userId) as Array<{ prefix: string }>;
+    return rows.map((r) => r.prefix);
+  }
+
+  /**
    * 关闭数据库连接。
    */
   close(): void {

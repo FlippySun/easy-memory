@@ -22,7 +22,7 @@ import { timingSafeEqual } from "node:crypto";
 import { log } from "../utils/logger.js";
 import { getClientIp as getClientIpShared } from "../utils/ip.js";
 import type { AuthService } from "../services/auth.js";
-import { COOKIE_ACCESS_TOKEN } from "../types/auth-schema.js";
+import { COOKIE_ACCESS_TOKEN, ROLE_PERMISSIONS } from "../types/auth-schema.js";
 
 /**
  * 从请求中解析指定 cookie 值。
@@ -161,4 +161,124 @@ export function getAdminKeyPrefix(c: Context): string {
  */
 export function getClientIp(c: Context): string {
   return getClientIpShared(c);
+}
+
+/**
+ * 创建 Admin-or-User 认证中间件 — 允许 admin 角色或拥有指定权限的 user 角色通过。
+ *
+ * 用于 Analytics / Audit / Memory Browser 等面板,
+ * admin 全权通过, user 需要指定权限 (analytics:read, audit:read, memories:browse)。
+ *
+ * @param adminToken - ADMIN_TOKEN 环境变量值
+ * @param authService - AuthService 用于 JWT 验证
+ * @param requiredPermission - 所需权限 (user 角色时检查)
+ */
+export function adminOrUserAuth(
+  adminToken: string,
+  authService: AuthService,
+  requiredPermission: string,
+) {
+  return async (c: Context, next: Next) => {
+    // Admin 功能未配置 → 403
+    if (!adminToken) {
+      return c.json(
+        {
+          error: "Admin API is not configured",
+          detail:
+            "Set ADMIN_TOKEN environment variable to enable admin functionality",
+        },
+        403,
+      );
+    }
+
+    // SEC-COOKIE: 优先从 httpOnly Cookie 读取 JWT
+    const cookieToken = parseCookie(c, COOKIE_ACCESS_TOKEN);
+
+    // 回退: 从 Authorization header 读取
+    let headerToken: string | undefined;
+    const authorization = c.req.header("Authorization");
+    if (authorization) {
+      const spaceIdx = authorization.indexOf(" ");
+      if (spaceIdx !== -1) {
+        const scheme = authorization.slice(0, spaceIdx);
+        const t = authorization.slice(spaceIdx + 1).trim();
+        if (scheme.toLowerCase() === "bearer" && t) {
+          headerToken = t;
+        }
+      }
+    }
+
+    if (!cookieToken && !headerToken) {
+      return c.json({ error: "Missing authentication credentials" }, 401);
+    }
+
+    // 尝试 Cookie JWT 路径
+    if (cookieToken) {
+      const payload = authService.verifyToken(cookieToken);
+      if (payload) {
+        const user = authService.getUserById(payload.sub);
+        if (user && user.is_active) {
+          // 注入用户上下文供下游中间件使用
+          c.set("authUserId" as never, payload.sub as never);
+          c.set("authUserRole" as never, user.role as never);
+          // admin 全权通过
+          if (user.role === "admin") {
+            await next();
+            return;
+          }
+          // user 角色需检查权限
+          const permissions =
+            ROLE_PERMISSIONS[user.role as keyof typeof ROLE_PERMISSIONS];
+          if (
+            permissions &&
+            (permissions as readonly string[]).includes(requiredPermission)
+          ) {
+            await next();
+            return;
+          }
+        }
+      }
+    }
+
+    // 尝试 Authorization header 路径
+    if (headerToken) {
+      // Path 1: ADMIN_TOKEN — timing-safe 比较
+      if (safeCompare(headerToken, adminToken)) {
+        c.set("authUserRole" as never, "admin" as never);
+        await next();
+        return;
+      }
+
+      // Path 2: JWT — 验证签名 + 过期 + 角色/权限
+      const payload = authService.verifyToken(headerToken);
+      if (payload) {
+        const user = authService.getUserById(payload.sub);
+        if (user && user.is_active) {
+          // 注入用户上下文供下游中间件使用
+          c.set("authUserId" as never, payload.sub as never);
+          c.set("authUserRole" as never, user.role as never);
+          if (user.role === "admin") {
+            await next();
+            return;
+          }
+          const permissions =
+            ROLE_PERMISSIONS[user.role as keyof typeof ROLE_PERMISSIONS];
+          if (
+            permissions &&
+            (permissions as readonly string[]).includes(requiredPermission)
+          ) {
+            await next();
+            return;
+          }
+        }
+      }
+    }
+
+    log.warn("Admin/User auth failed", {
+      path: c.req.path,
+      ip: getClientIpShared(c),
+      requiredPermission,
+    });
+    return c.json({ error: "Insufficient permissions" }, 403);
+  };
 }

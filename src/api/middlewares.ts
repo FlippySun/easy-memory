@@ -292,3 +292,40 @@ export function tlsEnforcement(trustProxy: boolean, requireTls: boolean) {
     await next();
   };
 }
+
+// =========================================================================
+// User Scope Middleware — 数据隔离 (Web UI)
+// =========================================================================
+
+/**
+ * 用户数据作用域中间件工厂。
+ *
+ * 从 adminOrUserAuth 注入的 authUserId / authUserRole 读取用户身份，
+ * 查询该用户关联的 API Key 前缀列表，
+ * 将 `userKeyPrefixes` 注入 Hono Context 供下游路由做数据隔离过滤。
+ *
+ * admin 角色不受限制（不注入前缀 = 可见全部数据）。
+ */
+export function createUserScopeMiddleware(apiKeyManager: ApiKeyManager) {
+  return async (c: Context, next: Next) => {
+    const role = c.get("authUserRole" as never) as string | undefined;
+
+    // admin 角色或 master token（无 userId）→ 全部可见
+    if (role === "admin") {
+      await next();
+      return;
+    }
+
+    const userId = c.get("authUserId" as never) as number | undefined;
+    if (userId != null) {
+      // 查询该用户拥有的 API Key 前缀
+      const keys = apiKeyManager.listKeysByUser(userId);
+      const prefixes = keys.filter((k) => !k.revoked_at).map((k) => k.prefix);
+
+      // 注入前缀列表供下游路由过滤
+      c.set("userKeyPrefixes" as never, prefixes as never);
+    }
+
+    await next();
+  };
+}
