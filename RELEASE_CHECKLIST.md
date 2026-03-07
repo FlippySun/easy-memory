@@ -14,8 +14,8 @@
 
 | #   | 板块                                               | 状态 | 备注                                                  |
 | --- | -------------------------------------------------- | ---- | ----------------------------------------------------- |
-| 1   | [npm 发布](#1-npm-发布)                            | ✅   | `easy-memory@0.5.4` 已发布到 npmjs.org                |
-| 2   | [Docker 化](#2-docker-化)                          | ✅   | 多平台镜像 (amd64+arm64) `0.5.4` 已推送 Docker Hub    |
+| 1   | [npm 发布](#1-npm-发布)                            | ✅   | `easy-memory@0.5.5` 已发布到 npmjs.org                |
+| 2   | [Docker 化](#2-docker-化)                          | ✅   | 多平台镜像 (amd64+arm64) `0.5.5` 已推送 Docker Hub    |
 | 3   | [CI/CD](#3-cicd-github-actions)                    | ✅   | 3 个 workflow 已配置，CI 绿色通过                     |
 | 4   | [VPS 部署](#4-vps-部署)                            | ✅   | `memory.zhiz.chat` HTTPS 运行中，Gemini+Ollama 双引擎 |
 | 5   | [README 完善](#5-readme-完善)                      | ✅   | 完整重写，含 API 文档、环境变量参考                   |
@@ -34,7 +34,7 @@
 | 条目                                                  | 状态 | 说明                                                       |
 | ----------------------------------------------------- | ---- | ---------------------------------------------------------- |
 | `name` — 确认 npm 包名可用 (`easy-memory`)            | ✅   | 名称可用，已发布                                           |
-| `version` — 当前版本 `0.5.4`                          | ✅   |                                                            |
+| `version` — 当前版本 `0.5.5`                          | ✅   |                                                            |
 | `bin` — 添加 `"easy-memory": "dist/index.js"`         | ✅   |                                                            |
 | `files` — 白名单发布文件                              | ✅   | `["dist/", "README.md", "LICENSE"]`                        |
 | `publishConfig` — 设置 `"access": "public"`           | ✅   |                                                            |
@@ -59,7 +59,7 @@
 | `.npmrc` 配置 auth token                | ✅   |                   |
 | `npm whoami` 验证认证成功               | ✅   | 用户: thj8632     |
 | `npm publish --dry-run` 预检            | ✅   |                   |
-| `npm publish` 正式发布                  | ✅   | easy-memory@0.5.4 |
+| `npm publish` 正式发布                  | ✅   | easy-memory@0.5.5 |
 | `npx easy-memory --help` 验证安装后可用 | ✅   |                   |
 
 ### 1.4 发布后验证
@@ -113,7 +113,7 @@
 | 条目                                 | 状态 | 说明                                    |
 | ------------------------------------ | ---- | --------------------------------------- |
 | Docker Hub 登录                      | ✅   | 用户: thj8632                           |
-| 镜像标签策略 (`latest` + SemVer tag) | ✅   | `thj8632/easy-memory:0.5.4` + `:latest` |
+| 镜像标签策略 (`latest` + SemVer tag) | ✅   | `thj8632/easy-memory:0.5.5` + `:latest` |
 | `docker push` 推送镜像               | ✅   | 多平台 amd64 + arm64                    |
 | `docker pull` 拉取验证               | ✅   | VPS 成功拉取                            |
 
@@ -140,7 +140,7 @@
 | ----------------------------- | ---- | ------------------------- |
 | 触发条件: `push tags: v*`     | ✅   |                           |
 | GitHub Secret: `NPM_TOKEN`    | ✅   | 已通过 gh secret set 配置 |
-| 发布步骤: build → publish     | ✅   |                           |
+| 发布步骤: build → publish     | ✅   | 已加版本存在检查，重复触发时自动跳过 |
 | 发布后自动创建 GitHub Release | ✅   |                           |
 
 ### 3.3 Docker 自动发布 (`.github/workflows/publish-docker.yml`)
@@ -151,7 +151,7 @@
 | GitHub Secrets: `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | ✅   | 已通过 gh secret set 配置 |
 | 多平台构建 (`linux/amd64`, `linux/arm64`)                | ✅   | QEMU + buildx             |
 | 推送到 Docker Hub (`thj8632/easy-memory`)                | ✅   |                           |
-| 标签: `latest` + `v0.5.4`                                | ✅   |                           |
+| 标签: `latest` + `v0.5.5`                                | ✅   |                           |
 
 ### 3.4 GitHub Repository 配置
 
@@ -276,7 +276,7 @@
 
 | 条目                      | 状态 | 说明                 |
 | ------------------------- | ---- | -------------------- |
-| MCP Tools 列表 + 参数说明 | ✅   | 4 个 Tool 表格       |
+| MCP Tools 列表 + 参数说明 | ✅   | 8 个 Tool 表格（含 preferred aliases） |
 | HTTP API 端点文档         | ✅   | 5 个端点完整字段说明 |
 
 ### 5.5 环境变量参考
@@ -290,7 +290,7 @@
 | 条目              | 状态 | 说明             |
 | ----------------- | ---- | ---------------- |
 | LICENSE 文件      | ✅   | MIT              |
-| CHANGELOG.md      | ⏭️   | 首版暂不需要     |
+| CHANGELOG.md      | ✅   | 已更新至 0.5.5  |
 | Contributing 指南 | ⏭️   | 个人项目暂不需要 |
 
 ---
@@ -362,7 +362,7 @@
 
 | 条目                                                 | 状态 | 说明                                                                      |
 | ---------------------------------------------------- | ---- | ------------------------------------------------------------------------- |
-| `/.well-known/mcp/server-card.json` 端点已实现       | ✅   | HTTP 服务公开元数据，无需认证，含 4 个 Tool 完整 inputSchema              |
+| `/.well-known/mcp/server-card.json` 端点已实现       | ✅   | HTTP 服务公开元数据，无需认证，含 8 个 Tool 完整 inputSchema              |
 | `smithery-config-schema.json` 配置 Schema 文件已创建 | ✅   | JSON Schema，定义 MCP stdio 模式的 env 配置项                             |
 | `mcp-config-template.json` 通用配置模板已创建        | ✅   | mcp.so 等平台的服务器配置模板                                             |
 | VPS 部署已更新 server-card 端点                      | ✅   | 已验证 `https://memory.zhiz.chat/.well-known/mcp/server-card.json` 可访问 |
@@ -420,7 +420,7 @@ Easy Memory — MCP Persistent Memory Service
 Give your AI assistant persistent memory across sessions. Easy Memory stores and retrieves knowledge using vector similarity search (Qdrant + Ollama/Gemini), enabling Claude, Cursor, VS Code Copilot, and other MCP clients to remember facts, decisions, code patterns, and more.
 
 Features:
-• 4 MCP Tools: memory_save, memory_search, memory_forget, memory_status
+• 8 MCP Tools: preferred `easy_memory_*` aliases + backward-compatible `memory_*`
 • Hybrid search: Vector similarity + BM25 keyword matching
 • Dual embedding engine: Ollama (local, free) + Gemini (cloud, auto-fallback)
 • Prompt injection safety: Memory content wrapped in boundary markers
@@ -527,13 +527,13 @@ Transport: Streamable HTTP (remote) / stdio (local npm)
 ```
 6. E2E 真实环境测试 ✅ → 870 单元测试 + E2E 全绿
   ↓
-1. npm 发布 ✅ → easy-memory@0.5.4
+1. npm 发布 ✅ → easy-memory@0.5.5
   ↓
-2. Docker 化 ✅ → thj8632/easy-memory:0.5.4 (amd64+arm64)
+2. Docker 化 ✅ → thj8632/easy-memory:0.5.5 (amd64+arm64)
   ↓
-3. CI/CD ✅ → 3 workflows, CI green (v0.5.4 tag triggered)
+3. CI/CD 🔧 → 等待 v0.5.5 tag / GitHub Release 同步
   ↓
-4. VPS 部署 ✅ → memory.zhiz.chat (HTTPS + Gemini 双引擎, v0.5.4)
+4. VPS 部署 🔧 → 待将 0.5.5 同步到 memory.zhiz.chat
   ↓
 5. README 完善 ✅ → 完整重写
   ↓

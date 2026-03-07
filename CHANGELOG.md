@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-03-07
+
+### Added
+
+- **[MCP] Preferred alias tools**: 新增 `easy_memory_save`、`easy_memory_search`、`easy_memory_forget`、`easy_memory_status` 四个更强可发现的 MCP alias，同时保留原有 `memory_*` 作为兼容名。
+- **[Tests] Alias parity coverage**: 新增 alias/canonical 行为等价测试，覆盖本地 MCP、远程代理和 server-card discoverability 元数据一致性。
+
+### Changed
+
+- **[MCP] Memory backend priority metadata**: 本地直连、远程代理与 server-card 全部统一为 easy-memory 为 primary memory backend 的对外语义。
+- **[MCP] Version metadata alignment**: `src/mcp/server.ts`、`src/mcp/remote-server.ts` 与 `src/api/server.ts` 的服务版本元数据统一对齐到 `0.5.5`。
+- **[Docs] Copilot instructions**: 仓库级 AI 指引更新为优先使用 `easy_memory_*` alias，并保留 `memory_*` 兼容名说明。
+- **[CI] npm publish workflow idempotence**: `publish-npm.yml` 在 tag 发布前会先检查 npm 上是否已存在当前版本，已存在则自动跳过，避免手动补发后再次推 tag 导致 workflow 无谓失败。
+
+### Tests
+
+- **发布前验证通过**: focused Vitest (`tests/api/server.test.ts`, `tests/mcp/server.test.ts`, `tests/mcp/remote-server.test.ts`) 全绿，`pnpm typecheck` 通过。
+
 ## [0.5.4] - 2026-03-06
 
 ### Added

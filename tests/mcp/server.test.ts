@@ -168,4 +168,34 @@ describe("mcp/server registerTools 审计链路", () => {
     expect(auditRecordMock).toHaveBeenCalledTimes(1);
     expect(analyticsIngestMock).toHaveBeenCalledTimes(1);
   });
+
+  it("easy_memory_search 与 memory_search 行为等价", async () => {
+    const args = {
+      query: "ui contract drift",
+      project: "web-ui",
+      limit: 5,
+      threshold: 0.55,
+    };
+
+    const canonical = await handlers.memory_search(args);
+    const alias = await handlers.easy_memory_search(args);
+
+    expect(alias).toEqual(canonical);
+
+    const operations = buildEntryMock.mock.calls.map(
+      (call) => (call[0] as Record<string, unknown>).operation,
+    );
+    expect(operations).toEqual(["memory_search", "memory_search"]);
+  });
+
+  it("registers preferred easy_memory aliases alongside canonical names", () => {
+    expect(handlers.memory_save).toBeDefined();
+    expect(handlers.memory_search).toBeDefined();
+    expect(handlers.memory_forget).toBeDefined();
+    expect(handlers.memory_status).toBeDefined();
+    expect(handlers.easy_memory_save).toBeDefined();
+    expect(handlers.easy_memory_search).toBeDefined();
+    expect(handlers.easy_memory_forget).toBeDefined();
+    expect(handlers.easy_memory_status).toBeDefined();
+  });
 });

@@ -411,14 +411,23 @@ curl -H "Authorization: Bearer your-token" http://localhost:3080/api/status
 
 ## MCP Tools
 
-Easy Memory 暴露 4 个 MCP Tools：
+Easy Memory 暴露 8 个 MCP Tools。
 
-| Tool            | 说明                   |
-| --------------- | ---------------------- |
-| `memory_save`   | 保存记忆到向量库       |
-| `memory_search` | 语义检索相关记忆       |
-| `memory_forget` | 归档/标记过时/删除记忆 |
-| `memory_status` | 系统健康状态           |
+其中：
+
+- `easy_memory_*` 是 **preferred discoverability alias**，优先推荐给支持工具枚举的 AI / MCP 客户端使用
+- `memory_*` 继续保留，作为向后兼容名称
+
+| Tool                  | 说明                           |
+| --------------------- | ------------------------------ |
+| `easy_memory_save`    | 保存记忆到向量库（preferred）  |
+| `easy_memory_search`  | 语义检索相关记忆（preferred）  |
+| `easy_memory_forget`  | 归档/标记过时/删除记忆（preferred） |
+| `easy_memory_status`  | 系统健康状态（preferred）      |
+| `memory_save`         | 保存记忆到向量库（兼容名）     |
+| `memory_search`       | 语义检索相关记忆（兼容名）     |
+| `memory_forget`       | 归档/标记过时/删除记忆（兼容名） |
+| `memory_status`       | 系统健康状态（兼容名）         |
 
 ---
 
@@ -450,7 +459,7 @@ curl http://your-server:3080/health
 ```bash
 docker pull thj8632/easy-memory:latest
 # 或指定版本
-docker pull thj8632/easy-memory:0.2.1
+docker pull thj8632/easy-memory:0.5.5
 ```
 
 支持平台：`linux/amd64`, `linux/arm64`

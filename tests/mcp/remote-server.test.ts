@@ -58,6 +58,65 @@ describe("createRemoteMcpServer memory_forget mapping", () => {
     vi.unstubAllGlobals();
   });
 
+  it("registers preferred easy_memory aliases", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue({ status: "ok" }),
+        text: vi.fn().mockResolvedValue(""),
+      }),
+    );
+
+    const { createRemoteMcpServer } =
+      await import("../../src/mcp/remote-server.js");
+
+    await createRemoteMcpServer("em_test_key", "https://memory.example.com");
+
+    expect(toolHandlers.get("memory_save")).toBeDefined();
+    expect(toolHandlers.get("memory_search")).toBeDefined();
+    expect(toolHandlers.get("memory_forget")).toBeDefined();
+    expect(toolHandlers.get("memory_status")).toBeDefined();
+    expect(toolHandlers.get("easy_memory_save")).toBeDefined();
+    expect(toolHandlers.get("easy_memory_search")).toBeDefined();
+    expect(toolHandlers.get("easy_memory_forget")).toBeDefined();
+    expect(toolHandlers.get("easy_memory_status")).toBeDefined();
+  });
+
+  it("easy_memory_search 与 memory_search 走相同远端路径并返回一致结果", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        memories: [{ id: "mem-1", score: 0.9 }],
+      }),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createRemoteMcpServer } =
+      await import("../../src/mcp/remote-server.js");
+
+    await createRemoteMcpServer("em_test_key", "https://memory.example.com");
+
+    const canonical = await toolHandlers.get("memory_search")!({
+      query: "priority policy",
+      project: "demo",
+    });
+    const alias = await toolHandlers.get("easy_memory_search")!({
+      query: "priority policy",
+      project: "demo",
+    });
+
+    expect(alias).toEqual(canonical);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://memory.example.com/api/search",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://memory.example.com/api/search",
+    );
+  });
+
   it("should send id/action/reason payload to /api/forget", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

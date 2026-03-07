@@ -251,12 +251,25 @@ describe("HTTP API Server", () => {
       expect(body.serverInfo.version).toBeDefined();
       expect(body.authentication.required).toBe(true);
       expect(body.tools).toBeInstanceOf(Array);
-      expect(body.tools.length).toBe(4);
+      expect(body.tools.length).toBe(8);
       const toolNames = body.tools.map((t: any) => t.name);
       expect(toolNames).toContain("memory_save");
       expect(toolNames).toContain("memory_search");
       expect(toolNames).toContain("memory_forget");
       expect(toolNames).toContain("memory_status");
+      expect(toolNames).toContain("easy_memory_save");
+      expect(toolNames).toContain("easy_memory_search");
+      expect(toolNames).toContain("easy_memory_forget");
+      expect(toolNames).toContain("easy_memory_status");
+
+      const canonicalSearch = body.tools.find(
+        (t: any) => t.name === "memory_search",
+      );
+      const aliasSearch = body.tools.find(
+        (t: any) => t.name === "easy_memory_search",
+      );
+      expect(aliasSearch.description).toContain("[PREFERRED ALIAS]");
+      expect(aliasSearch.inputSchema).toEqual(canonicalSearch.inputSchema);
     });
   });
 
