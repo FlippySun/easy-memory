@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import {
   adminAuth,
+  adminOrUserAuth,
   getAdminKeyPrefix,
   getClientIp,
 } from "../../src/api/admin-auth.js";
@@ -102,6 +103,66 @@ describe("adminAuth middleware", () => {
     });
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe("adminOrUserAuth middleware", () => {
+  it("rejects invalid non-admin credentials with 401", async () => {
+    const mockAuthService = {
+      verifyToken: vi.fn().mockReturnValue(null),
+      getUserById: vi.fn(),
+    } as unknown as AuthService;
+
+    const app = new Hono();
+    app.use(
+      "/admin/*",
+      adminOrUserAuth("secret-admin-token", mockAuthService, "analytics:read"),
+    );
+    app.get("/admin/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/admin/test", {
+      headers: { Authorization: "Bearer master-token" },
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 403 for authenticated user without required permission", async () => {
+    const mockAuthService = {
+      verifyToken: vi.fn().mockReturnValue({
+        sub: 7,
+        role: "user",
+        username: "reader",
+        iat: 1,
+        exp: 9999999999,
+      }),
+      getUserById: vi.fn().mockReturnValue({
+        id: 7,
+        username: "reader",
+        role: "user",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        last_login_at: null,
+        is_active: true,
+      }),
+    } as unknown as AuthService;
+
+    const app = new Hono();
+    app.use(
+      "/admin/*",
+      adminOrUserAuth(
+        "secret-admin-token",
+        mockAuthService,
+        "settings:write",
+      ),
+    );
+    app.get("/admin/test", (c) => c.json({ ok: true }));
+
+    const res = await app.request("/admin/test", {
+      headers: { Authorization: "Bearer user-jwt-token" },
+    });
+
+    expect(res.status).toBe(403);
   });
 });
 

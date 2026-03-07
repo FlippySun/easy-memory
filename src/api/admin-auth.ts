@@ -170,12 +170,12 @@ export function getClientIp(c: Context): string {
  * admin 全权通过, user 需要指定权限 (analytics:read, audit:read, memories:browse)。
  *
  * @param adminToken - ADMIN_TOKEN 环境变量值
- * @param authService - AuthService 用于 JWT 验证
+ * @param authService - 可选 AuthService，用于 JWT 验证
  * @param requiredPermission - 所需权限 (user 角色时检查)
  */
 export function adminOrUserAuth(
   adminToken: string,
-  authService: AuthService,
+  authService: AuthService | undefined,
   requiredPermission: string,
 ) {
   return async (c: Context, next: Next) => {
@@ -214,9 +214,9 @@ export function adminOrUserAuth(
 
     // 尝试 Cookie JWT 路径
     if (cookieToken) {
-      const payload = authService.verifyToken(cookieToken);
+      const payload = authService?.verifyToken(cookieToken);
       if (payload) {
-        const user = authService.getUserById(payload.sub);
+        const user = authService?.getUserById(payload.sub);
         if (user && user.is_active) {
           // 注入用户上下文供下游中间件使用
           c.set("authUserId" as never, payload.sub as never);
@@ -236,6 +236,14 @@ export function adminOrUserAuth(
             await next();
             return;
           }
+
+          log.warn("Admin/User auth permission denied", {
+            path: c.req.path,
+            ip: getClientIpShared(c),
+            requiredPermission,
+            role: user.role,
+          });
+          return c.json({ error: "Insufficient permissions" }, 403);
         }
       }
     }
@@ -250,9 +258,9 @@ export function adminOrUserAuth(
       }
 
       // Path 2: JWT — 验证签名 + 过期 + 角色/权限
-      const payload = authService.verifyToken(headerToken);
+      const payload = authService?.verifyToken(headerToken);
       if (payload) {
-        const user = authService.getUserById(payload.sub);
+        const user = authService?.getUserById(payload.sub);
         if (user && user.is_active) {
           // 注入用户上下文供下游中间件使用
           c.set("authUserId" as never, payload.sub as never);
@@ -270,6 +278,14 @@ export function adminOrUserAuth(
             await next();
             return;
           }
+
+          log.warn("Admin/User auth permission denied", {
+            path: c.req.path,
+            ip: getClientIpShared(c),
+            requiredPermission,
+            role: user.role,
+          });
+          return c.json({ error: "Insufficient permissions" }, 403);
         }
       }
     }
@@ -279,6 +295,6 @@ export function adminOrUserAuth(
       ip: getClientIpShared(c),
       requiredPermission,
     });
-    return c.json({ error: "Insufficient permissions" }, 403);
+    return c.json({ error: "Invalid admin or user credentials" }, 401);
   };
 }

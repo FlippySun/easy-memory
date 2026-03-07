@@ -46,6 +46,7 @@ import { AuditService } from "../src/services/audit.js";
 import { AnalyticsService } from "../src/services/analytics.js";
 import { ApiKeyManager } from "../src/services/api-key-manager.js";
 import { BanManager } from "../src/services/ban-manager.js";
+import { AuthService } from "../src/services/auth.js";
 import { RuntimeConfigManager } from "../src/services/runtime-config.js";
 import { RateLimiter } from "../src/utils/rate-limiter.js";
 import type { AppContainer, AppConfig } from "../src/container.js";
@@ -67,6 +68,7 @@ let auditService: AuditService;
 let analyticsService: AnalyticsService;
 let apiKeyManager: ApiKeyManager;
 let banManager: BanManager;
+let authService: AuthService;
 let rateLimiter: RateLimiter;
 let runtimeConfig: RuntimeConfigManager;
 
@@ -164,6 +166,7 @@ function buildContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     apiKeyManager,
     banManager,
     runtimeConfig,
+    auth: authService,
   };
 }
 
@@ -223,6 +226,14 @@ beforeAll(() => {
     banManager.open();
   }
 
+  // Real AuthService (shared DB)
+  authService = new AuthService({
+    adminToken: ADMIN_TOKEN,
+    adminUsername: "",
+    adminPassword: "",
+  });
+  authService.open(adminDb ?? undefined);
+
   // Real RateLimiter
   rateLimiter = new RateLimiter({
     maxCallsPerMinute: 100,
@@ -272,6 +283,7 @@ beforeAll(() => {
 afterAll(async () => {
   await auditService.close();
   analyticsService.close();
+  authService.close();
   apiKeyManager.close();
   banManager.close();
 
