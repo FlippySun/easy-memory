@@ -30,6 +30,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
+import { useAuth } from "../contexts/auth";
 
 interface AnalyticsData {
   overview: AdminOverviewResponse | null;
@@ -56,6 +57,8 @@ interface AnalyticsData {
 }
 
 export function AnalyticsPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [data, setData] = useState<AnalyticsData>({
     overview: null,
     timeline: null,
@@ -67,8 +70,10 @@ export function AnalyticsPage() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState("24h");
   const abortRef = useRef<AbortController | null>(null);
+  const timelineGranularity = timeRange === "24h" ? "hourly" : "daily";
 
   const fetchData = useCallback(async () => {
     // 取消前一个正在进行的请求，防止快速切换 timeRange 导致的竞态
@@ -78,8 +83,13 @@ export function AnalyticsPage() {
 
     setLoading(true);
     setError(null);
+    setWarningMessage(null);
     try {
-      const param = `range=${encodeURIComponent(timeRange)}`;
+      const sharedParams = new URLSearchParams({
+        range: timeRange,
+      });
+      const timelineParams = new URLSearchParams(sharedParams);
+      timelineParams.set("granularity", timelineGranularity);
       const [
         overview,
         timeline,
@@ -89,30 +99,69 @@ export function AnalyticsPage() {
         searchQual,
         perf,
       ] = await Promise.all([
-        adminApi.getOverview(param, { signal: controller.signal }),
-        adminApi.getTimeline(param, { signal: controller.signal }),
-        adminApi.getOperations(param, { signal: controller.signal }),
-        adminApi.getErrors(param, { signal: controller.signal }),
+        adminApi.getOverview(sharedParams.toString(), {
+          signal: controller.signal,
+        }),
+        adminApi.getTimeline(timelineParams.toString(), {
+          signal: controller.signal,
+        }),
+        adminApi.getOperations(sharedParams.toString(), {
+          signal: controller.signal,
+        }),
+        adminApi.getErrors(sharedParams.toString(), {
+          signal: controller.signal,
+        }),
         adminApi
-          .getMemoryGrowth(param, { signal: controller.signal })
-          .catch(() => null),
+          .getMemoryGrowth(sharedParams.toString(), {
+            signal: controller.signal,
+          })
+          .then((res) => ({ data: res.data, failed: false as const }))
+          .catch(() => ({
+            data: null,
+            failed: true as const,
+            label: "Memory Growth",
+          })),
         adminApi
-          .getSearchQuality(param, { signal: controller.signal })
-          .catch(() => null),
+          .getSearchQuality(sharedParams.toString(), {
+            signal: controller.signal,
+          })
+          .then((res) => ({ data: res.data, failed: false as const }))
+          .catch(() => ({
+            data: null,
+            failed: true as const,
+            label: "Search Quality",
+          })),
         adminApi
-          .getPerformance(param, { signal: controller.signal })
-          .catch(() => null),
+          .getPerformance(sharedParams.toString(), {
+            signal: controller.signal,
+          })
+          .then((res) => ({ data: res.data, failed: false as const }))
+          .catch(() => ({
+            data: null,
+            failed: true as const,
+            label: "Performance",
+          })),
       ]);
       // 仅在未被中止时更新状态
       if (!controller.signal.aborted) {
+        const failedPanels = [memGrowth, searchQual, perf].flatMap((result) =>
+          result.failed ? [result.label] : [],
+        );
+
+        if (failedPanels.length > 0) {
+          setWarningMessage(
+            `Some enhanced panels are temporarily unavailable: ${failedPanels.join(", ")}.`,
+          );
+        }
+
         setData({
           overview,
           timeline,
           operations,
           errors,
-          memoryGrowth: memGrowth?.data ?? null,
-          searchQuality: searchQual?.data ?? null,
-          performance: perf?.data ?? null,
+          memoryGrowth: memGrowth.data,
+          searchQuality: searchQual.data,
+          performance: perf.data,
         });
       }
     } catch (err) {
@@ -128,7 +177,7 @@ export function AnalyticsPage() {
         setLoading(false);
       }
     }
-  }, [timeRange]);
+  }, [timeRange, timelineGranularity]);
 
   useEffect(() => {
     fetchData();
@@ -140,6 +189,22 @@ export function AnalyticsPage() {
   const overview = data.overview;
   const opBreakdown = data.operations?.data ?? [];
   const timelineData = data.timeline?.data ?? [];
+  const analyticsReady = overview?.analytics_ready !== false;
+  const searchQualitySummary = data.searchQuality?.reduce(
+    (acc, point) => {
+      acc.totalSearches += point.total_searches;
+      acc.hitCount += point.hit_count;
+      acc.weightedScore += point.avg_score * point.total_searches;
+      acc.weightedResults += point.avg_result_count * point.total_searches;
+      return acc;
+    },
+    {
+      totalSearches: 0,
+      hitCount: 0,
+      weightedScore: 0,
+      weightedResults: 0,
+    },
+  );
 
   const totalRequests = overview?.requests_total ?? 0;
   const successfulRequests = Math.max(
@@ -181,7 +246,9 @@ export function AnalyticsPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Analytics</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Service usage and performance metrics
+            {isAdmin
+              ? "Service usage and performance metrics"
+              : "Usage and performance metrics for your own activity"}
           </p>
         </div>
         <div className="flex gap-1 bg-white border border-slate-200 rounded-lg p-1">
@@ -214,6 +281,27 @@ export function AnalyticsPage() {
         </Card>
       ) : (
         <>
+          {warningMessage && (
+            <Card>
+              <div className="flex items-center gap-3 text-amber-700">
+                <AlertCircle size={18} />
+                <p className="text-sm font-medium">{warningMessage}</p>
+              </div>
+            </Card>
+          )}
+
+          {!analyticsReady && (
+            <Card>
+              <div className="flex items-center gap-3 text-amber-700">
+                <AlertCircle size={18} />
+                <p className="text-sm font-medium">
+                  Analytics data is not ready yet. Current cards may be
+                  incomplete until aggregation finishes.
+                </p>
+              </div>
+            </Card>
+          )}
+
           {/* Summary Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard
@@ -260,10 +348,10 @@ export function AnalyticsPage() {
               <div className="space-y-3">
                 {opBreakdown.map((op, i) => {
                   const count = op.count || 0;
-                  const maxCount = Math.max(
-                    ...opBreakdown.map((o) => o.count || 0),
+                  const pct = Math.max(
+                    0,
+                    Math.min(100, (op.percentage ?? 0) * 100),
                   );
-                  const pct = maxCount > 0 ? (count / maxCount) * 100 : 0;
                   return (
                     <div key={i} className="space-y-1">
                       <div className="flex items-center justify-between text-sm">
@@ -299,10 +387,10 @@ export function AnalyticsPage() {
                 </h3>
               </div>
               <div className="flex items-end gap-1 h-32">
-                {timelineData.slice(-48).map((point, i) => {
+                {timelineData.map((point, i) => {
                   const count = point.total_count || 0;
                   const maxVal = Math.max(
-                    ...timelineData.slice(-48).map((p) => p.total_count || 0),
+                    ...timelineData.map((p) => p.total_count || 0),
                   );
                   const height = maxVal > 0 ? (count / maxVal) * 100 : 0;
                   return (
@@ -396,21 +484,38 @@ export function AnalyticsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
                 <div className="text-center p-3 bg-slate-50 rounded-lg">
                   <p className="text-2xl font-bold text-slate-900">
-                    {Math.round(data.searchQuality[0].hit_rate * 100)}%
+                    {searchQualitySummary &&
+                    searchQualitySummary.totalSearches > 0
+                      ? `${Math.round((searchQualitySummary.hitCount / searchQualitySummary.totalSearches) * 100)}%`
+                      : "—"}
                   </p>
-                  <p className="text-xs text-slate-500 mt-1">Hit Rate</p>
+                  <p className="text-xs text-slate-500 mt-1">Range Hit Rate</p>
                 </div>
                 <div className="text-center p-3 bg-slate-50 rounded-lg">
                   <p className="text-2xl font-bold text-slate-900">
-                    {data.searchQuality[0].avg_score.toFixed(3)}
+                    {searchQualitySummary &&
+                    searchQualitySummary.totalSearches > 0
+                      ? (
+                          searchQualitySummary.weightedScore /
+                          searchQualitySummary.totalSearches
+                        ).toFixed(3)
+                      : "—"}
                   </p>
-                  <p className="text-xs text-slate-500 mt-1">Avg Score</p>
+                  <p className="text-xs text-slate-500 mt-1">Range Avg Score</p>
                 </div>
                 <div className="text-center p-3 bg-slate-50 rounded-lg">
                   <p className="text-2xl font-bold text-slate-900">
-                    {data.searchQuality[0].avg_result_count.toFixed(1)}
+                    {searchQualitySummary &&
+                    searchQualitySummary.totalSearches > 0
+                      ? (
+                          searchQualitySummary.weightedResults /
+                          searchQualitySummary.totalSearches
+                        ).toFixed(1)
+                      : "—"}
                   </p>
-                  <p className="text-xs text-slate-500 mt-1">Avg Results</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Range Avg Results
+                  </p>
                 </div>
               </div>
             </Card>

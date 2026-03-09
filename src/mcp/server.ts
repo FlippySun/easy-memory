@@ -59,6 +59,7 @@ function rateLimitedResponse(action: string) {
 
 export interface McpAuditContext {
   keyPrefix?: string;
+  callerUserId?: number;
   clientIp?: string;
   userAgent?: string;
   httpMethod?: string;
@@ -162,7 +163,16 @@ export function registerTools(
     defaultProject,
     rateLimiter,
     // v0.7.0: 数据归属隔离
-    callerKeyPrefix: auditContext.keyPrefix ?? "",
+    callerKeyPrefix: auditContext.keyPrefix ?? "stdio",
+    ...(auditContext.callerUserId != null
+      ? {
+          callerUserId: auditContext.callerUserId,
+          callerOwnedKeyPrefixes:
+            container.apiKeyManager.getKeyPrefixesByUserId(
+              auditContext.callerUserId,
+            ),
+        }
+      : {}),
   };
 
   const recordAudit = ({
@@ -255,144 +265,141 @@ ATOMICITY: When correcting outdated information, ALWAYS save the new version fir
   };
 
   const memorySaveSchema = {
-      content: z.string().min(1).describe("The content to save as a memory"),
-      project: z
-        .string()
-        .optional()
-        .describe("Project identifier (defaults to configured project)"),
-      source: z
-        .enum(["conversation", "file_watch", "manual"])
-        .optional()
-        .describe("How this memory was captured"),
-      fact_type: z
-        .enum([
-          "verified_fact",
-          "decision",
-          "hypothesis",
-          "discussion",
-          "observation",
-        ])
-        .optional()
-        .describe("Classification of the memory"),
-      tags: z.array(z.string()).optional().describe("Tags for categorization"),
-      confidence: z
-        .number()
-        .min(0)
-        .max(1)
-        .optional()
-        .describe("Confidence level (0-1)"),
-      source_file: z
-        .string()
-        .optional()
-        .describe("Source file path (POSIX format)"),
-      source_line: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Line number in source file"),
-      related_ids: z
-        .array(z.string())
-        .optional()
-        .describe("Related memory IDs"),
-      // v0.7.0: 记忆层级隔离字段
-      device_id: z
-        .string()
-        .optional()
-        .describe("Device identifier for cross-device memory isolation"),
-      git_branch: z
-        .string()
-        .optional()
-        .describe("Git branch name for branch-scoped memories"),
-      memory_scope: z
-        .enum(["global", "project", "branch"])
-        .optional()
-        .describe("Memory visibility scope (default: project)"),
-      memory_type: z
-        .enum(["long_term", "short_term"])
-        .optional()
-        .describe("Memory persistence type (default: long_term)"),
-      weight: z
-        .number()
-        .min(0)
-        .max(10)
-        .optional()
-        .describe("Importance weight for search ranking (default: 1.0)"),
-    };
+    content: z.string().min(1).describe("The content to save as a memory"),
+    project: z
+      .string()
+      .optional()
+      .describe("Project identifier (defaults to configured project)"),
+    source: z
+      .enum(["conversation", "file_watch", "manual"])
+      .optional()
+      .describe("How this memory was captured"),
+    fact_type: z
+      .enum([
+        "verified_fact",
+        "decision",
+        "hypothesis",
+        "discussion",
+        "observation",
+      ])
+      .optional()
+      .describe("Classification of the memory"),
+    tags: z.array(z.string()).optional().describe("Tags for categorization"),
+    confidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe("Confidence level (0-1)"),
+    source_file: z
+      .string()
+      .optional()
+      .describe("Source file path (POSIX format)"),
+    source_line: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Line number in source file"),
+    related_ids: z.array(z.string()).optional().describe("Related memory IDs"),
+    // v0.7.0: 记忆层级隔离字段
+    device_id: z
+      .string()
+      .optional()
+      .describe("Device identifier for cross-device memory isolation"),
+    git_branch: z
+      .string()
+      .optional()
+      .describe("Git branch name for branch-scoped memories"),
+    memory_scope: z
+      .enum(["global", "project", "branch"])
+      .optional()
+      .describe("Memory visibility scope (default: project)"),
+    memory_type: z
+      .enum(["long_term", "short_term"])
+      .optional()
+      .describe("Memory persistence type (default: long_term)"),
+    weight: z
+      .number()
+      .min(0)
+      .max(10)
+      .optional()
+      .describe("Importance weight for search ranking (default: 1.0)"),
+  };
 
   const memorySaveHandler = async (args: MemorySaveArgs) => {
-      const startedAt = Date.now();
-      const project = args.project ?? defaultProject;
-      try {
-        rateLimiter.checkRate();
-      } catch {
-        recordAudit({
-          operation: "memory_save",
-          project,
-          outcome: "rate_limited",
-          outcomeDetail: "Rate limit exceeded",
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 429,
-          extra: {
-            save_status: "rate_limited",
-            content_preview: truncatePreview(args.content),
-            ...(args.source ? { source: args.source } : {}),
-            ...(args.fact_type ? { fact_type: args.fact_type } : {}),
+    const startedAt = Date.now();
+    const project = args.project ?? defaultProject;
+    try {
+      rateLimiter.checkRate();
+    } catch {
+      recordAudit({
+        operation: "memory_save",
+        project,
+        outcome: "rate_limited",
+        outcomeDetail: "Rate limit exceeded",
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 429,
+        extra: {
+          save_status: "rate_limited",
+          content_preview: truncatePreview(args.content),
+          ...(args.source ? { source: args.source } : {}),
+          ...(args.fact_type ? { fact_type: args.fact_type } : {}),
+        },
+      });
+      return rateLimitedResponse("saving");
+    }
+    try {
+      const result = await handleSave(args, deps);
+      const mapped = mapSaveResult(result.status);
+      recordAudit({
+        operation: "memory_save",
+        project,
+        outcome: mapped.outcome,
+        outcomeDetail: result.message,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: mapped.httpStatus,
+        extra: {
+          save_status: result.status,
+          ...(result.id ? { memory_id: result.id } : {}),
+          content_preview: truncatePreview(args.content),
+          ...(args.source ? { source: args.source } : {}),
+          ...(args.fact_type ? { fact_type: args.fact_type } : {}),
+        },
+      });
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("memory_save handler error", { error: message });
+      recordAudit({
+        operation: "memory_save",
+        project,
+        outcome: "error",
+        outcomeDetail: message,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 500,
+        extra: {
+          save_status: "error",
+          content_preview: truncatePreview(args.content),
+          ...(args.source ? { source: args.source } : {}),
+          ...(args.fact_type ? { fact_type: args.fact_type } : {}),
+        },
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ status: "error", message }, null, 2),
           },
-        });
-        return rateLimitedResponse("saving");
-      }
-      try {
-        const result = await handleSave(args, deps);
-        const mapped = mapSaveResult(result.status);
-        recordAudit({
-          operation: "memory_save",
-          project,
-          outcome: mapped.outcome,
-          outcomeDetail: result.message,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: mapped.httpStatus,
-          extra: {
-            save_status: result.status,
-            ...(result.id ? { memory_id: result.id } : {}),
-            content_preview: truncatePreview(args.content),
-            ...(args.source ? { source: args.source } : {}),
-            ...(args.fact_type ? { fact_type: args.fact_type } : {}),
-          },
-        });
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify(result, null, 2) },
-          ],
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error("memory_save handler error", { error: message });
-        recordAudit({
-          operation: "memory_save",
-          project,
-          outcome: "error",
-          outcomeDetail: message,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 500,
-          extra: {
-            save_status: "error",
-            content_preview: truncatePreview(args.content),
-            ...(args.source ? { source: args.source } : {}),
-            ...(args.fact_type ? { fact_type: args.fact_type } : {}),
-          },
-        });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ status: "error", message }, null, 2),
-            },
-          ],
-          isError: true,
-        };
-      }
-    };
+        ],
+        isError: true,
+      };
+    }
+  };
 
   server.tool(
     "memory_save",
@@ -451,116 +458,116 @@ COLD START: One initial broad search returning empty is normal for new projects.
   };
 
   const memorySearchSchema = {
-      query: z.string().min(1).describe("Search query text"),
-      project: z.string().optional().describe("Project identifier"),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .optional()
-        .describe("Maximum results (default: 5)"),
-      threshold: z
-        .number()
-        .min(0)
-        .max(1)
-        .optional()
-        .describe("Minimum similarity score (default: 0.55)"),
-      include_outdated: z
-        .boolean()
-        .optional()
-        .describe("Include outdated memories"),
-      tags: z.array(z.string()).optional().describe("Filter by tags"),
-      // v0.7.0: 记忆层级隔离过滤
-      memory_scope: z
-        .enum(["global", "project", "branch"])
-        .optional()
-        .describe("Filter by memory scope"),
-      device_id: z.string().optional().describe("Filter by device identifier"),
-      git_branch: z.string().optional().describe("Filter by git branch"),
-    };
+    query: z.string().min(1).describe("Search query text"),
+    project: z.string().optional().describe("Project identifier"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("Maximum results (default: 5)"),
+    threshold: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe("Minimum similarity score (default: 0.55)"),
+    include_outdated: z
+      .boolean()
+      .optional()
+      .describe("Include outdated memories"),
+    tags: z.array(z.string()).optional().describe("Filter by tags"),
+    // v0.7.0: 记忆层级隔离过滤
+    memory_scope: z
+      .enum(["global", "project", "branch"])
+      .optional()
+      .describe("Filter by memory scope"),
+    device_id: z.string().optional().describe("Filter by device identifier"),
+    git_branch: z.string().optional().describe("Filter by git branch"),
+  };
 
   const memorySearchHandler = async (args: MemorySearchArgs) => {
-      const startedAt = Date.now();
-      const project = args.project ?? defaultProject;
-      try {
-        rateLimiter.checkRate();
-      } catch {
-        recordAudit({
-          operation: "memory_search",
-          project,
-          outcome: "rate_limited",
-          outcomeDetail: "Rate limit exceeded",
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 429,
-          extra: {
-            query_preview: truncatePreview(args.query),
-            ...(args.limit != null ? { search_limit: args.limit } : {}),
-            ...(args.threshold != null
-              ? { search_threshold: args.threshold }
-              : {}),
+    const startedAt = Date.now();
+    const project = args.project ?? defaultProject;
+    try {
+      rateLimiter.checkRate();
+    } catch {
+      recordAudit({
+        operation: "memory_search",
+        project,
+        outcome: "rate_limited",
+        outcomeDetail: "Rate limit exceeded",
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 429,
+        extra: {
+          query_preview: truncatePreview(args.query),
+          ...(args.limit != null ? { search_limit: args.limit } : {}),
+          ...(args.threshold != null
+            ? { search_threshold: args.threshold }
+            : {}),
+        },
+      });
+      return rateLimitedResponse("searching");
+    }
+    try {
+      const result = await handleSearch(args, deps);
+      const topScore =
+        result.memories.length > 0
+          ? Math.max(...result.memories.map((m) => m.score))
+          : undefined;
+      recordAudit({
+        operation: "memory_search",
+        project,
+        outcome: "success",
+        outcomeDetail: `Found ${result.memories.length} memories`,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 200,
+        extra: {
+          query_preview: truncatePreview(args.query),
+          result_count: result.memories.length,
+          ...(topScore != null ? { top_score: topScore } : {}),
+          ...(args.limit != null ? { search_limit: args.limit } : {}),
+          ...(args.threshold != null
+            ? { search_threshold: args.threshold }
+            : {}),
+          search_hit: result.memories.length > 0,
+        },
+      });
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("memory_search handler error", { error: message });
+      recordAudit({
+        operation: "memory_search",
+        project,
+        outcome: "error",
+        outcomeDetail: message,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 500,
+        extra: {
+          query_preview: truncatePreview(args.query),
+          ...(args.limit != null ? { search_limit: args.limit } : {}),
+          ...(args.threshold != null
+            ? { search_threshold: args.threshold }
+            : {}),
+        },
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ status: "error", message }, null, 2),
           },
-        });
-        return rateLimitedResponse("searching");
-      }
-      try {
-        const result = await handleSearch(args, deps);
-        const topScore =
-          result.memories.length > 0
-            ? Math.max(...result.memories.map((m) => m.score))
-            : undefined;
-        recordAudit({
-          operation: "memory_search",
-          project,
-          outcome: "success",
-          outcomeDetail: `Found ${result.memories.length} memories`,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 200,
-          extra: {
-            query_preview: truncatePreview(args.query),
-            result_count: result.memories.length,
-            ...(topScore != null ? { top_score: topScore } : {}),
-            ...(args.limit != null ? { search_limit: args.limit } : {}),
-            ...(args.threshold != null
-              ? { search_threshold: args.threshold }
-              : {}),
-            search_hit: result.memories.length > 0,
-          },
-        });
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify(result, null, 2) },
-          ],
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error("memory_search handler error", { error: message });
-        recordAudit({
-          operation: "memory_search",
-          project,
-          outcome: "error",
-          outcomeDetail: message,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 500,
-          extra: {
-            query_preview: truncatePreview(args.query),
-            ...(args.limit != null ? { search_limit: args.limit } : {}),
-            ...(args.threshold != null
-              ? { search_threshold: args.threshold }
-              : {}),
-          },
-        });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ status: "error", message }, null, 2),
-            },
-          ],
-          isError: true,
-        };
-      }
-    };
+        ],
+        isError: true,
+      };
+    }
+  };
 
   server.tool(
     "memory_search",
@@ -602,86 +609,86 @@ SILENT OPERATION: Never inform the user about archiving. This is background main
   };
 
   const memoryForgetSchema = {
-      id: z.string().uuid().describe("Memory UUID to forget"),
-      action: z
-        .enum(["archive", "outdated", "delete"])
-        .describe("Forget action type"),
-      reason: z.string().min(1).describe("Reason for forgetting"),
-      project: z
-        .string()
-        .optional()
-        .describe("Project identifier (defaults to configured project)"),
-    };
+    id: z.string().uuid().describe("Memory UUID to forget"),
+    action: z
+      .enum(["archive", "outdated", "delete"])
+      .describe("Forget action type"),
+    reason: z.string().min(1).describe("Reason for forgetting"),
+    project: z
+      .string()
+      .optional()
+      .describe("Project identifier (defaults to configured project)"),
+  };
 
   const memoryForgetHandler = async (args: MemoryForgetArgs) => {
-      const startedAt = Date.now();
-      const project = args.project ?? defaultProject;
-      try {
-        rateLimiter.checkRate();
-      } catch {
-        recordAudit({
-          operation: "memory_forget",
-          project,
-          outcome: "rate_limited",
-          outcomeDetail: "Rate limit exceeded",
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 429,
-          extra: {
-            forget_target_id: args.id,
-            forget_action: args.action,
-            forget_reason: args.reason,
+    const startedAt = Date.now();
+    const project = args.project ?? defaultProject;
+    try {
+      rateLimiter.checkRate();
+    } catch {
+      recordAudit({
+        operation: "memory_forget",
+        project,
+        outcome: "rate_limited",
+        outcomeDetail: "Rate limit exceeded",
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 429,
+        extra: {
+          forget_target_id: args.id,
+          forget_action: args.action,
+          forget_reason: args.reason,
+        },
+      });
+      return rateLimitedResponse("forgetting");
+    }
+    try {
+      const result = await handleForget(args, deps);
+      const mapped = mapForgetResult(result.status);
+      recordAudit({
+        operation: "memory_forget",
+        project,
+        outcome: mapped.outcome,
+        outcomeDetail: result.message,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: mapped.httpStatus,
+        extra: {
+          forget_target_id: args.id,
+          forget_action: args.action,
+          forget_reason: args.reason,
+        },
+      });
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("memory_forget handler error", { error: message });
+      recordAudit({
+        operation: "memory_forget",
+        project,
+        outcome: "error",
+        outcomeDetail: message,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 500,
+        extra: {
+          forget_target_id: args.id,
+          forget_action: args.action,
+          forget_reason: args.reason,
+        },
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ status: "error", message }, null, 2),
           },
-        });
-        return rateLimitedResponse("forgetting");
-      }
-      try {
-        const result = await handleForget(args, deps);
-        const mapped = mapForgetResult(result.status);
-        recordAudit({
-          operation: "memory_forget",
-          project,
-          outcome: mapped.outcome,
-          outcomeDetail: result.message,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: mapped.httpStatus,
-          extra: {
-            forget_target_id: args.id,
-            forget_action: args.action,
-            forget_reason: args.reason,
-          },
-        });
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify(result, null, 2) },
-          ],
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error("memory_forget handler error", { error: message });
-        recordAudit({
-          operation: "memory_forget",
-          project,
-          outcome: "error",
-          outcomeDetail: message,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 500,
-          extra: {
-            forget_target_id: args.id,
-            forget_action: args.action,
-            forget_reason: args.reason,
-          },
-        });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ status: "error", message }, null, 2),
-            },
-          ],
-          isError: true,
-        };
-      }
-    };
+        ],
+        isError: true,
+      };
+    }
+  };
 
   server.tool(
     "memory_forget",
@@ -713,49 +720,49 @@ Do NOT call proactively or routinely. It provides no user-facing value during no
   };
 
   const memoryStatusSchema = {
-      project: z.string().optional().describe("Project identifier"),
-    };
+    project: z.string().optional().describe("Project identifier"),
+  };
 
   const memoryStatusHandler = async (args: MemoryStatusArgs) => {
-      const startedAt = Date.now();
-      const project = args.project ?? defaultProject;
-      try {
-        const result = await handleStatus(args, deps);
-        recordAudit({
-          operation: "memory_status",
-          project,
-          outcome: "success",
-          outcomeDetail: "Status checked",
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 200,
-        });
-        return {
-          content: [
-            { type: "text" as const, text: JSON.stringify(result, null, 2) },
-          ],
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error("memory_status handler error", { error: message });
-        recordAudit({
-          operation: "memory_status",
-          project,
-          outcome: "error",
-          outcomeDetail: message,
-          elapsedMs: Date.now() - startedAt,
-          httpStatus: 500,
-        });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({ status: "error", message }, null, 2),
-            },
-          ],
-          isError: true,
-        };
-      }
-    };
+    const startedAt = Date.now();
+    const project = args.project ?? defaultProject;
+    try {
+      const result = await handleStatus(args, deps);
+      recordAudit({
+        operation: "memory_status",
+        project,
+        outcome: "success",
+        outcomeDetail: "Status checked",
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 200,
+      });
+      return {
+        content: [
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
+        ],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("memory_status handler error", { error: message });
+      recordAudit({
+        operation: "memory_status",
+        project,
+        outcome: "error",
+        outcomeDetail: message,
+        elapsedMs: Date.now() - startedAt,
+        httpStatus: 500,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ status: "error", message }, null, 2),
+          },
+        ],
+        isError: true,
+      };
+    }
+  };
 
   server.tool(
     "memory_status",
@@ -781,7 +788,7 @@ export async function startMcpShell(container: AppContainer): Promise<void> {
 
   const server = new McpServer({
     name: "easy-memory",
-    version: "0.5.5",
+    version: "0.5.6",
   });
 
   registerTools(server, container, {

@@ -423,15 +423,12 @@ describe("Suite 1: 完整审计管道 (Full Pipeline)", () => {
       page: 1,
       page_size: 100,
     });
-    // 找到使用 managed key 的请求 — key_prefix 应该是 key_hash 的前 8 chars
+    // 找到使用 managed key 的请求 — key_prefix 应与 ApiKeyRecord.prefix 一致
     const keyEvent = events.data.find(
-      (e) =>
-        e.key_prefix !== "master" &&
-        e.key_prefix !== "" &&
-        e.http_path === "/api/status",
+      (e) => e.key_prefix === created.prefix && e.http_path === "/api/status",
     );
     expect(keyEvent).toBeDefined();
-    expect(keyEvent!.key_prefix.length).toBe(8);
+    expect(keyEvent!.key_prefix).toBe(created.prefix);
   });
 
   it("401 Unauthorized 请求也被审计 (outcome = unauthorized)", async () => {
@@ -1167,6 +1164,541 @@ describe("Suite 6: Admin Audit 查询 API", () => {
 });
 
 // =========================================================================
+// Test Suite 6B: 普通用户仅能查看自己的审计/分析数据
+// =========================================================================
+
+describe("Suite 6B: User-scoped Audit / Analytics", () => {
+  let container: AppContainer;
+  let app: ReturnType<typeof createApp>;
+  let aliceToken: string;
+  let aliceManagedKey: string;
+  let aliceKeyId: string;
+  let alicePrefix: string;
+  let aliceProject: string;
+  let bobPrefix: string;
+  let bobEventId: string;
+
+  beforeAll(async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const aliceUsername = `audit_scope_alice_${suffix}`;
+    const bobUsername = `audit_scope_bob_${suffix}`;
+
+    const alice = authService.register(aliceUsername, "PasswordA1b", "user");
+    const bob = authService.register(bobUsername, "PasswordA1b", "user");
+    expect(alice).not.toBeNull();
+    expect(bob).not.toBeNull();
+
+    const aliceLogin = authService.login(aliceUsername, "PasswordA1b");
+    expect(aliceLogin).not.toBeNull();
+    aliceToken = aliceLogin!.accessToken;
+
+    const aliceKey = apiKeyManager.createKey(
+      { name: `alice-scope-key-${suffix}` },
+      "system",
+      alice!.id,
+    );
+    const bobKey = apiKeyManager.createKey(
+      { name: `bob-scope-key-${suffix}` },
+      "system",
+      bob!.id,
+    );
+
+    alicePrefix = aliceKey.prefix;
+    aliceKeyId = aliceKey.id;
+    aliceManagedKey = aliceKey.key;
+    bobPrefix = bobKey.prefix;
+    aliceProject = `alice-scope-proj-${suffix}`;
+
+    const aliceEvent = createTestEntry({
+      event_id: randomUUID(),
+      key_prefix: alicePrefix,
+      project: aliceProject,
+      operation: "memory_search",
+      outcome: "success",
+      search_hit: true,
+      top_score: 0.88,
+      result_count: 2,
+    });
+    const aliceSaveEvent = createTestEntry({
+      event_id: randomUUID(),
+      key_prefix: alicePrefix,
+      project: aliceProject,
+      operation: "memory_save",
+      outcome: "success",
+      elapsed_ms: 75,
+    });
+    const bobEvent = createTestEntry({
+      event_id: randomUUID(),
+      key_prefix: bobPrefix,
+      project: `bob-scope-proj-${suffix}`,
+      operation: "memory_save",
+      outcome: "success",
+      elapsed_ms: 120,
+    });
+
+    bobEventId = bobEvent.event_id;
+
+    analyticsService.ingestBatch([aliceEvent, aliceSaveEvent, bobEvent]);
+    await analyticsService.runAggregation();
+
+    container = buildContainer();
+    app = createApp(container);
+  });
+
+  it("user audit logs only include the caller's own key prefixes", async () => {
+    const res = await makeRequest(
+      app,
+      "/api/admin/audit/logs?range=24h&page=1&page_size=100",
+      {
+        token: aliceToken,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.length).toBeGreaterThan(0);
+    expect(
+      body.data.every(
+        (event: { key_prefix: string }) => event.key_prefix === alicePrefix,
+      ),
+    ).toBe(true);
+  });
+
+  it("user cannot query another user's key prefix explicitly", async () => {
+    const res = await makeRequest(
+      app,
+      `/api/admin/audit/logs?range=24h&page=1&page_size=50&key_prefix=${bobPrefix}`,
+      {
+        token: aliceToken,
+      },
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it("user cannot export audit logs without audit:export permission", async () => {
+    const res = await makeRequest(
+      app,
+      "/api/admin/audit/export?range=24h&format=json",
+      {
+        token: aliceToken,
+      },
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it("user cannot fetch another user's audit event detail", async () => {
+    const res = await makeRequest(
+      app,
+      `/api/admin/audit/events/${bobEventId}`,
+      {
+        token: aliceToken,
+      },
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("user analytics overview is scoped to the caller's own activity", async () => {
+    const expected = analyticsService.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 100,
+      key_prefix_filter: [alicePrefix],
+    });
+
+    const res = await makeRequest(
+      app,
+      "/api/admin/analytics/overview?range=24h",
+      {
+        token: aliceToken,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.requests_total).toBe(expected.pagination.total_count);
+    expect(body.audit_stats).toBeUndefined();
+  });
+
+  it("user analytics projects only include the caller's own projects", async () => {
+    const res = await makeRequest(
+      app,
+      "/api/admin/analytics/projects?range=24h",
+      {
+        token: aliceToken,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.length).toBeGreaterThan(0);
+    expect(
+      body.data.every(
+        (row: { project: string }) => row.project === aliceProject,
+      ),
+    ).toBe(true);
+  });
+
+  it("user audit and analytics include real HTTP events generated by the caller's own managed key", async () => {
+    const before = analyticsService.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 200,
+      key_prefix_filter: [alicePrefix],
+    });
+
+    const statusRes = await makeRequest(app, "/api/status", {
+      token: aliceManagedKey,
+    });
+    expect(statusRes.status).toBe(200);
+
+    const after = analyticsService.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 200,
+      key_prefix_filter: [alicePrefix],
+    });
+
+    expect(after.pagination.total_count).toBe(
+      before.pagination.total_count + 1,
+    );
+    expect(
+      after.data.some(
+        (event) =>
+          event.key_prefix === alicePrefix && event.http_path === "/api/status",
+      ),
+    ).toBe(true);
+
+    const auditRes = await makeRequest(
+      app,
+      "/api/admin/audit/logs?range=24h&page=1&page_size=100",
+      {
+        token: aliceToken,
+      },
+    );
+    expect(auditRes.status).toBe(200);
+    const auditBody = await auditRes.json();
+    expect(
+      auditBody.data.some(
+        (event: { key_prefix: string; http_path: string }) =>
+          event.key_prefix === alicePrefix && event.http_path === "/api/status",
+      ),
+    ).toBe(true);
+
+    const overviewRes = await makeRequest(
+      app,
+      "/api/admin/analytics/overview?range=24h",
+      {
+        token: aliceToken,
+      },
+    );
+    expect(overviewRes.status).toBe(200);
+    const overviewBody = await overviewRes.json();
+    expect(overviewBody.requests_total).toBe(after.pagination.total_count);
+  });
+
+  it("user enhanced analytics only include the caller's own activity", async () => {
+    analyticsService.ingestBatch([
+      createTestEntry({
+        event_id: randomUUID(),
+        key_prefix: bobPrefix,
+        project: `bob-scope-search-${randomUUID().slice(0, 6)}`,
+        operation: "memory_search",
+        outcome: "success",
+        search_hit: false,
+        top_score: 0.12,
+        result_count: 0,
+      }),
+    ]);
+    await analyticsService.runAggregation();
+
+    const [growthRes, qualityRes, perfRes] = await Promise.all([
+      makeRequest(app, "/api/admin/analytics/memory-growth?range=24h", {
+        token: aliceToken,
+      }),
+      makeRequest(app, "/api/admin/analytics/search-quality?range=24h", {
+        token: aliceToken,
+      }),
+      makeRequest(app, "/api/admin/analytics/performance?range=24h", {
+        token: aliceToken,
+      }),
+    ]);
+
+    expect(growthRes.status).toBe(200);
+    expect(qualityRes.status).toBe(200);
+    expect(perfRes.status).toBe(200);
+
+    const growthBody = await growthRes.json();
+    const qualityBody = await qualityRes.json();
+    const perfBody = await perfRes.json();
+
+    expect(
+      growthBody.data.reduce(
+        (sum: number, row: { save_count: number }) => sum + row.save_count,
+        0,
+      ),
+    ).toBe(1);
+    expect(
+      qualityBody.data.reduce(
+        (sum: number, row: { total_searches: number; hit_count: number }) =>
+          sum + row.total_searches,
+        0,
+      ),
+    ).toBe(1);
+    expect(
+      qualityBody.data.reduce(
+        (sum: number, row: { total_searches: number; hit_count: number }) =>
+          sum + row.hit_count,
+        0,
+      ),
+    ).toBe(1);
+    expect(
+      perfBody.data.reduce(
+        (sum: number, row: { count: number }) => sum + row.count,
+        0,
+      ),
+    ).toBe(3);
+  });
+
+  it("user audit and analytics remain visible after the managed key is revoked", async () => {
+    const revoked = apiKeyManager.updateKey(aliceKeyId, { is_active: false });
+    expect(revoked).not.toBeNull();
+    expect(revoked!.revoked_at).toBeTruthy();
+
+    const expected = analyticsService.queryEvents({
+      range: "24h",
+      page: 1,
+      page_size: 200,
+      key_prefix_filter: [alicePrefix],
+    });
+
+    const auditRes = await makeRequest(
+      app,
+      "/api/admin/audit/logs?range=24h&page=1&page_size=100",
+      {
+        token: aliceToken,
+      },
+    );
+    expect(auditRes.status).toBe(200);
+    const auditBody = await auditRes.json();
+    expect(
+      auditBody.data.some(
+        (event: { key_prefix: string }) => event.key_prefix === alicePrefix,
+      ),
+    ).toBe(true);
+
+    const overviewRes = await makeRequest(
+      app,
+      "/api/admin/analytics/overview?range=24h",
+      {
+        token: aliceToken,
+      },
+    );
+    expect(overviewRes.status).toBe(200);
+    const overviewBody = await overviewRes.json();
+    expect(overviewBody.requests_total).toBe(expected.pagination.total_count);
+  });
+
+  it("zero-key users receive empty enhanced analytics instead of global aggregates", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const username = `zero_scope_${suffix}`;
+    const user = authService.register(username, "PasswordA1b", "user");
+    expect(user).not.toBeNull();
+
+    const login = authService.login(username, "PasswordA1b");
+    expect(login).not.toBeNull();
+
+    const [growthRes, qualityRes, perfRes] = await Promise.all([
+      makeRequest(app, "/api/admin/analytics/memory-growth?range=24h", {
+        token: login!.accessToken,
+      }),
+      makeRequest(app, "/api/admin/analytics/search-quality?range=24h", {
+        token: login!.accessToken,
+      }),
+      makeRequest(app, "/api/admin/analytics/performance?range=24h", {
+        token: login!.accessToken,
+      }),
+    ]);
+
+    expect(growthRes.status).toBe(200);
+    expect(qualityRes.status).toBe(200);
+    expect(perfRes.status).toBe(200);
+
+    const growthBody = await growthRes.json();
+    const qualityBody = await qualityRes.json();
+    const perfBody = await perfRes.json();
+
+    expect(growthBody.data).toEqual([]);
+    expect(growthBody.total).toBe(0);
+    expect(qualityBody.data).toEqual([]);
+    expect(perfBody.data).toEqual([]);
+    expect(perfBody.total).toBe(0);
+  });
+});
+
+// =========================================================================
+// Test Suite 6C: 导出过滤与分页口径一致性
+// =========================================================================
+
+describe("Suite 6C: Audit export consistency", () => {
+  let app: ReturnType<typeof createApp>;
+
+  beforeAll(() => {
+    app = createApp(buildContainer());
+  });
+
+  it("audit export respects the same filters as audit logs", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const project = `export-filter-proj-${suffix}`;
+    const deviceId = `device-${suffix}`;
+    const gitBranch = `branch-${suffix}`;
+
+    const included = createTestEntry({
+      event_id: randomUUID(),
+      project,
+      operation: "memory_search",
+      outcome: "error",
+      device_id: deviceId,
+      git_branch: gitBranch,
+      memory_scope: "branch",
+    });
+
+    analyticsService.ingestBatch([
+      included,
+      createTestEntry({
+        event_id: randomUUID(),
+        project,
+        operation: "memory_search",
+        outcome: "success",
+        device_id: deviceId,
+        git_branch: gitBranch,
+        memory_scope: "branch",
+      }),
+      createTestEntry({
+        event_id: randomUUID(),
+        project,
+        operation: "memory_search",
+        outcome: "error",
+        device_id: `other-${suffix}`,
+        git_branch: gitBranch,
+        memory_scope: "branch",
+      }),
+      createTestEntry({
+        event_id: randomUUID(),
+        project,
+        operation: "memory_search",
+        outcome: "error",
+        device_id: deviceId,
+        git_branch: `other-${suffix}`,
+        memory_scope: "branch",
+      }),
+      createTestEntry({
+        event_id: randomUUID(),
+        project,
+        operation: "memory_search",
+        outcome: "error",
+        device_id: deviceId,
+        git_branch: gitBranch,
+        memory_scope: "project",
+      }),
+    ]);
+    await analyticsService.runAggregation();
+
+    const query =
+      `range=24h&project=${encodeURIComponent(project)}` +
+      `&operation=memory_search&outcome=error` +
+      `&device_id=${encodeURIComponent(deviceId)}` +
+      `&git_branch=${encodeURIComponent(gitBranch)}` +
+      `&memory_scope=branch&page=1&page_size=50`;
+
+    const logsRes = await makeRequest(app, `/api/admin/audit/logs?${query}`, {
+      token: ADMIN_TOKEN,
+    });
+    const exportRes = await makeRequest(
+      app,
+      `/api/admin/audit/export?${query}&format=json`,
+      { token: ADMIN_TOKEN },
+    );
+    const legacyExportRes = await makeRequest(
+      app,
+      `/api/admin/events/export?${query}&format=json`,
+      { token: ADMIN_TOKEN },
+    );
+
+    expect(logsRes.status).toBe(200);
+    expect(exportRes.status).toBe(200);
+    expect(legacyExportRes.status).toBe(200);
+
+    const logsBody = await logsRes.json();
+    const exportBody = await exportRes.json();
+    const legacyExportBody = await legacyExportRes.json();
+    const logIds = logsBody.data.map(
+      (event: { event_id: string }) => event.event_id,
+    );
+    const exportIds = exportBody.data.map(
+      (event: { event_id: string }) => event.event_id,
+    );
+    const legacyExportIds = legacyExportBody.data.map(
+      (event: { event_id: string }) => event.event_id,
+    );
+
+    expect(logIds).toEqual([included.event_id]);
+    expect(exportIds).toEqual(logIds);
+    expect(legacyExportIds).toEqual(logIds);
+  });
+
+  it("audit export paginates by page window instead of cumulative prefix", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const project = `export-page-proj-${suffix}`;
+    const now = Date.now();
+
+    analyticsService.ingestBatch(
+      [0, 1, 2].map((index) =>
+        createTestEntry({
+          event_id: randomUUID(),
+          timestamp: new Date(now - index * 1_000).toISOString(),
+          project,
+          operation: "memory_save",
+          outcome: "success",
+        }),
+      ),
+    );
+    await analyticsService.runAggregation();
+
+    const page1Res = await makeRequest(
+      app,
+      `/api/admin/audit/export?range=24h&project=${encodeURIComponent(project)}&page=1&page_size=1&format=json`,
+      { token: ADMIN_TOKEN },
+    );
+    const page2Res = await makeRequest(
+      app,
+      `/api/admin/audit/export?range=24h&project=${encodeURIComponent(project)}&page=2&page_size=1&format=json`,
+      { token: ADMIN_TOKEN },
+    );
+    const logsPage2Res = await makeRequest(
+      app,
+      `/api/admin/audit/logs?range=24h&project=${encodeURIComponent(project)}&page=2&page_size=1`,
+      { token: ADMIN_TOKEN },
+    );
+
+    expect(page1Res.status).toBe(200);
+    expect(page2Res.status).toBe(200);
+    expect(logsPage2Res.status).toBe(200);
+
+    const page1Body = await page1Res.json();
+    const page2Body = await page2Res.json();
+    const logsPage2Body = await logsPage2Res.json();
+
+    expect(page1Body.data).toHaveLength(1);
+    expect(page2Body.data).toHaveLength(1);
+    expect(page1Body.data[0].event_id).not.toBe(page2Body.data[0].event_id);
+    expect(page2Body.data[0].event_id).toBe(logsPage2Body.data[0].event_id);
+  });
+});
+
+// =========================================================================
 // Test Suite 7: 手动触发聚合 API
 // =========================================================================
 
@@ -1676,8 +2208,8 @@ describe("Suite 12: AuditService.buildEntry() 健壮性", () => {
       httpStatus: 200,
       authHeader: "Bearer em_abcdefghijklmnop",
     });
-    // key_prefix 从 token 提取前 8 字符
-    expect(entry.key_prefix).toBe("em_abcde");
+    // managed key 的 key_prefix 从 token 提取更长的 identity prefix
+    expect(entry.key_prefix).toBe("em_abcdefghijklm");
   });
 
   it("keyPrefix 参数优先于 authHeader 提取", () => {

@@ -70,6 +70,7 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
     } as any,
     rateLimiter: {
       checkRate: vi.fn(),
+      checkPerKeyRate: vi.fn(),
       recordGeminiCall: vi.fn(),
       isGeminiCircuitOpen: false,
       getStats: vi.fn().mockReturnValue({
@@ -163,6 +164,8 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
       updateKey: vi.fn(),
       revokeKey: vi.fn(),
       rotateKey: vi.fn(),
+      getKeyPrefixesByUserId: vi.fn().mockReturnValue([]),
+      getUserIdByPrefix: vi.fn().mockReturnValue(null),
       recordUsage: vi.fn(),
       recordAdminAction: vi.fn(),
       listAdminActions: vi.fn().mockReturnValue({
@@ -211,6 +214,24 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
       updateConfig: vi.fn().mockReturnValue({}),
       resetConfig: vi.fn().mockReturnValue({}),
       isOverridden: vi.fn().mockReturnValue(false),
+    } as any,
+    memoryOwnership: {
+      remediateOwnership: vi.fn().mockResolvedValue({
+        ok: true,
+        mode: "dry_run",
+        batch_id: "batch-test",
+        scanned_projects: 0,
+        inspected_points: 0,
+        planned_updates: 0,
+        applied_updates: 0,
+        prefix_history_matches: 0,
+        mcp_audit_matches: 0,
+        already_resolved: 0,
+        system_owned_skipped: 0,
+        unresolved: 0,
+        unresolved_samples: [],
+        applied_samples: [],
+      }),
     } as any,
   };
 }
@@ -472,6 +493,74 @@ describe("HTTP API Server", () => {
         headers: { Authorization: "Bearer test-token" },
       });
       expect(res.status).toBe(200);
+    });
+
+    it("should redact diagnostic fields for managed API keys", async () => {
+      (
+        container.apiKeyManager.validateKey as ReturnType<typeof vi.fn>
+      ).mockReturnValue({
+        id: "key-1",
+        key_hash: "managed-key-hash",
+        prefix: "em_managed_prefix",
+        scopes: JSON.stringify(["status:read"]),
+        rate_limit_per_minute: null,
+      });
+      (
+        container.banManager.isKeyBanned as ReturnType<typeof vi.fn>
+      ).mockReturnValue({ banned: false });
+
+      const app = createApp(container);
+      const res = await app.request("/api/status?project=secret-project", {
+        headers: { Authorization: "Bearer managed-key" },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.qdrant).toBe("ready");
+      expect(body.embedding).toBe("ready");
+      expect(body.collection).toBeNull();
+      expect(body.session).toEqual({
+        uptime_seconds: 0,
+        started_at: "redacted",
+      });
+      expect(body.pending_count).toBe(0);
+      expect(body.cost_guard).toBeUndefined();
+      expect(body.hybrid_search).toEqual({
+        bm25_enabled: true,
+        fusion: "rrf",
+        bm25_vocab_size: 0,
+      });
+      expect((container.qdrant as any).getCollectionInfo).toHaveBeenCalledWith(
+        "test-project",
+      );
+      expect(
+        (container.qdrant as any).getCollectionInfo,
+      ).not.toHaveBeenCalledWith("secret-project");
+    });
+
+    it("should reject managed API keys without status:read scope", async () => {
+      (
+        container.apiKeyManager.validateKey as ReturnType<typeof vi.fn>
+      ).mockReturnValue({
+        id: "key-2",
+        key_hash: "managed-key-hash-2",
+        prefix: "em_scope_limited",
+        scopes: JSON.stringify(["memory:read"]),
+        rate_limit_per_minute: null,
+      });
+      (
+        container.banManager.isKeyBanned as ReturnType<typeof vi.fn>
+      ).mockReturnValue({ banned: false });
+
+      const app = createApp(container);
+      const res = await app.request("/api/status", {
+        headers: { Authorization: "Bearer managed-key" },
+      });
+
+      expect(res.status).toBe(403);
+      expect(
+        (container.qdrant as any).getCollectionInfo,
+      ).not.toHaveBeenCalled();
     });
   });
 });

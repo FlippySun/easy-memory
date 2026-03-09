@@ -318,9 +318,8 @@ export function createUserScopeMiddleware(apiKeyManager: ApiKeyManager) {
 
     const userId = c.get("authUserId" as never) as number | undefined;
     if (userId != null) {
-      // 查询该用户拥有的 API Key 前缀
-      const keys = apiKeyManager.listKeysByUser(userId);
-      const prefixes = keys.filter((k) => !k.revoked_at).map((k) => k.prefix);
+      // 查询该用户历史上拥有过的全部 API Key 前缀
+      const prefixes = apiKeyManager.getKeyPrefixesByUserId(userId);
 
       // 注入前缀列表供下游路由过滤
       c.set("userKeyPrefixes" as never, prefixes as never);

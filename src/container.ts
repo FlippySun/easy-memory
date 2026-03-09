@@ -28,6 +28,7 @@ import { ApiKeyManager } from "./services/api-key-manager.js";
 import { BanManager } from "./services/ban-manager.js";
 import { RuntimeConfigManager } from "./services/runtime-config.js";
 import { AuthService } from "./services/auth.js";
+import { MemoryOwnershipService } from "./services/memory-ownership.js";
 import { log } from "./utils/logger.js";
 
 // =========================================================================
@@ -110,6 +111,8 @@ export interface AppContainer {
   readonly runtimeConfig: RuntimeConfigManager;
   /** 用户认证服务 */
   readonly auth: AuthService;
+  /** 历史 owner 修复与归属回填服务 */
+  readonly memoryOwnership: MemoryOwnershipService;
 }
 
 // =========================================================================
@@ -356,6 +359,11 @@ export function createContainer(config: AppConfig): AppContainer {
     auth.open(adminDb);
   }
 
+  const memoryOwnership = new MemoryOwnershipService({
+    qdrant,
+    apiKeyManager,
+  });
+
   return {
     config,
     qdrant,
@@ -368,5 +376,6 @@ export function createContainer(config: AppConfig): AppContainer {
     banManager,
     runtimeConfig,
     auth,
+    memoryOwnership,
   };
 }

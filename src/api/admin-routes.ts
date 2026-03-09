@@ -17,17 +17,19 @@
  * 铁律: 绝对禁止 console.log (MCP stdio 依赖)
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { AnalyticsService } from "../services/analytics.js";
 import type { AuditService } from "../services/audit.js";
 import type { ApiKeyManager } from "../services/api-key-manager.js";
 import type { BanManager } from "../services/ban-manager.js";
 import type { RuntimeConfigManager } from "../services/runtime-config.js";
+import type { MemoryOwnershipService } from "../services/memory-ownership.js";
 import {
   AuditQuerySchema,
   AnalyticsQuerySchema,
   TimeRangeQuerySchema,
 } from "../types/audit-schema.js";
+import { z } from "zod/v4";
 import {
   CreateApiKeySchema,
   UpdateApiKeySchema,
@@ -36,7 +38,9 @@ import {
   ListBansQuerySchema,
   UpdateRuntimeConfigSchema,
 } from "../types/admin-schema.js";
+import { ROLE_PERMISSIONS } from "../types/auth-schema.js";
 import { getAdminKeyPrefix, getClientIp } from "./admin-auth.js";
+import { createUserScopeMiddleware } from "./middlewares.js";
 
 // =========================================================================
 // Types
@@ -53,7 +57,16 @@ export interface AdminRouteDeps {
   apiKeyManager: ApiKeyManager;
   banManager: BanManager;
   runtimeConfig: RuntimeConfigManager;
+  memoryOwnership: MemoryOwnershipService;
 }
+
+const OwnershipRemediationSchema = z
+  .object({
+    mode: z.enum(["dry_run", "apply"]).default("dry_run"),
+    project: z.string().min(1).optional(),
+    limit: z.number().int().min(1).max(5000).default(1000),
+  })
+  .strip();
 
 // =========================================================================
 // Helper — 从 query string 提取参数
@@ -81,8 +94,64 @@ function extractQueryParams(
  * @param deps - Admin 路由所需的全部依赖
  */
 export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
-  const { analytics, audit, apiKeyManager, banManager, runtimeConfig } = deps;
+  const {
+    analytics,
+    audit,
+    apiKeyManager,
+    banManager,
+    runtimeConfig,
+    memoryOwnership,
+  } = deps;
   const admin = new Hono<Env>();
+
+  admin.use("/*", createUserScopeMiddleware(apiKeyManager));
+
+  function isAdminRequest(c: Context): boolean {
+    return (c.get("authUserRole" as never) as string | undefined) === "admin";
+  }
+
+  function getScopedKeyPrefixes(c: Context): string[] | undefined {
+    if (isAdminRequest(c)) return undefined;
+    return (c.get("userKeyPrefixes" as never) as string[] | undefined) ?? [];
+  }
+
+  function hasPermission(c: Context, permission: string): boolean {
+    const role = c.get("authUserRole" as never) as string | undefined;
+    if (role === "admin") return true;
+    if (!role) return false;
+    const permissions = ROLE_PERMISSIONS[role as keyof typeof ROLE_PERMISSIONS];
+    return Boolean(
+      permissions && (permissions as readonly string[]).includes(permission),
+    );
+  }
+
+  function withScopedKeyPrefixFilter<T extends object>(
+    c: Context,
+    query: T,
+  ): T & { key_prefix_filter?: string[] } {
+    const keyPrefixes = getScopedKeyPrefixes(c);
+    if (!keyPrefixes) {
+      return query;
+    }
+    return {
+      ...query,
+      key_prefix_filter: keyPrefixes,
+    };
+  }
+
+  function scopeQueryByKeyPrefix<T extends { key_prefix?: string | undefined }>(
+    c: Context,
+    query: T,
+  ): (T & { key_prefix_filter?: string[] }) | Response {
+    const keyPrefixes = getScopedKeyPrefixes(c);
+    if (!keyPrefixes) {
+      return query;
+    }
+    if (query.key_prefix && !keyPrefixes.includes(query.key_prefix)) {
+      return c.json({ error: "Insufficient permissions" }, 403);
+    }
+    return withScopedKeyPrefixFilter(c, query);
+  }
 
   // =====================================================================
   // Health Check
@@ -346,11 +415,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const errorRate = analytics.getErrorRate({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const errorRate = analytics.getErrorRate(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
 
     return c.json({
       requests_total: errorRate.total_requests,
@@ -360,7 +431,7 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       rejected_total: errorRate.rejected_count,
       uptime_ms: process.uptime() * 1000,
       analytics_ready: analytics.isReady,
-      audit_stats: audit.getStats(),
+      ...(isAdminRequest(c) ? { audit_stats: audit.getStats() } : {}),
     });
   });
 
@@ -372,11 +443,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getUserUsage({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getUserUsage(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
     return c.json({ data: result, total: result.length });
   });
 
@@ -388,11 +461,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getProjectUsage({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getProjectUsage(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
     return c.json({ data: result, total: result.length });
   });
 
@@ -404,13 +479,22 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
+    const granularity =
+      parsed.data.range === "7d" ||
+      parsed.data.range === "30d" ||
+      parsed.data.range === "90d"
+        ? ("daily" as const)
+        : ("hourly" as const);
+
     // 使用 rollup 数据计算操作分布
-    const rollups = analytics.queryRollups({
-      granularity: "daily",
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const rollups = analytics.queryRollups(
+      withScopedKeyPrefixFilter(c, {
+        granularity,
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
 
     // 按 operation 聚合
     const opMap = new Map<
@@ -457,11 +541,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getErrorRate({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getErrorRate(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
     return c.json(result);
   });
 
@@ -482,7 +568,10 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const rollups = analytics.queryRollups(parsed.data);
+    const scopedQuery = scopeQueryByKeyPrefix(c, parsed.data);
+    if (scopedQuery instanceof Response) return scopedQuery;
+
+    const rollups = analytics.queryRollups(scopedQuery);
     return c.json({ data: rollups, total: rollups.length });
   });
 
@@ -494,12 +583,14 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getHitRate({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-      project: c.req.query("project"),
-    });
+    const result = analytics.getHitRate(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+        project: c.req.query("project"),
+      }),
+    );
     return c.json(result);
   });
 
@@ -532,7 +623,10 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       );
     }
 
-    const result = analytics.queryEvents(parsed.data);
+    const scopedQuery = scopeQueryByKeyPrefix(c, parsed.data);
+    if (scopedQuery instanceof Response) return scopedQuery;
+
+    const result = analytics.queryEvents(scopedQuery);
     return c.json(result);
   });
 
@@ -558,8 +652,15 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
+    if (!hasPermission(c, "audit:export")) {
+      return c.json({ error: "Insufficient permissions" }, 403);
+    }
+
+    const scopedQuery = scopeQueryByKeyPrefix(c, parsed.data);
+    if (scopedQuery instanceof Response) return scopedQuery;
+
     const format = c.req.query("format") ?? "json";
-    const events = analytics.exportEvents(parsed.data);
+    const events = analytics.exportEvents(scopedQuery);
     const dateStr = new Date().toISOString().slice(0, 10);
 
     if (format === "csv") {
@@ -626,17 +727,20 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
 
   // GET /api/admin/analytics/memory-growth — 记忆增长趋势
   admin.get("/analytics/memory-growth", (c) => {
-    const rawQuery = extractQueryParams(c, ["from", "to", "range"]);
+    const rawQuery = extractQueryParams(c, ["from", "to", "range", "project"]);
     const parsed = TimeRangeQuerySchema.safeParse(rawQuery);
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getMemoryGrowthTrend({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getMemoryGrowthTrend(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+        project: c.req.query("project"),
+      }),
+    );
     return c.json({ data: result, total: result.length });
   });
 
@@ -648,11 +752,14 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getSearchQualityMetrics({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getSearchQualityMetrics(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+        project: c.req.query("project"),
+      }),
+    );
     return c.json({ data: result });
   });
 
@@ -664,11 +771,14 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
 
-    const result = analytics.getPerformanceBreakdown({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getPerformanceBreakdown(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+        project: c.req.query("project"),
+      }),
+    );
     return c.json({ data: result, total: result.length });
   });
 
@@ -679,12 +789,65 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       return c.json({ error: "Missing event ID" }, 400);
     }
 
-    const event = analytics.getEventById(eventId);
+    const event = analytics.getEventById(eventId, getScopedKeyPrefixes(c));
     if (!event) {
       return c.json({ error: "Event not found" }, 404);
     }
 
     return c.json({ data: event });
+  });
+
+  // =====================================================================
+  // Memory Ownership Remediation — /api/admin/memories/*
+  // =====================================================================
+
+  admin.post("/memories/ownership/remediate", async (c) => {
+    if (!isAdminRequest(c)) {
+      return c.json({ error: "Insufficient permissions" }, 403);
+    }
+
+    let body: unknown = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      body = {};
+    }
+
+    const parsed = OwnershipRemediationSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Validation failed", details: parsed.error.issues },
+        400,
+      );
+    }
+
+    const result = await memoryOwnership.remediateOwnership({
+      mode: parsed.data.mode,
+      limit: parsed.data.limit,
+      ...(parsed.data.project ? { project: parsed.data.project } : {}),
+    });
+
+    if (parsed.data.mode === "apply") {
+      const adminPrefix = getAdminKeyPrefix(c);
+      const clientIp = getClientIp(c);
+      apiKeyManager.recordAdminAction(
+        "memory_ownership_remediate",
+        "memory_ownership",
+        result.batch_id,
+        adminPrefix,
+        clientIp,
+        {
+          mode: result.mode,
+          project: parsed.data.project ?? null,
+          inspected_points: result.inspected_points,
+          planned_updates: result.planned_updates,
+          applied_updates: result.applied_updates,
+          unresolved: result.unresolved,
+        },
+      );
+    }
+
+    return c.json(result);
   });
 
   // =====================================================================
@@ -781,6 +944,9 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       "range",
       "page",
       "page_size",
+      "device_id",
+      "git_branch",
+      "memory_scope",
     ]);
     const parsed = AuditQuerySchema.safeParse(rawQuery);
     if (!parsed.success) {
@@ -789,7 +955,9 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
         400,
       );
     }
-    const result = analytics.queryEvents(parsed.data);
+    const scopedQuery = scopeQueryByKeyPrefix(c, parsed.data);
+    if (scopedQuery instanceof Response) return scopedQuery;
+    const result = analytics.queryEvents(scopedQuery);
     return c.json(result);
   });
 
@@ -805,13 +973,21 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       "range",
       "page",
       "page_size",
+      "device_id",
+      "git_branch",
+      "memory_scope",
     ]);
     const parsed = AuditQuerySchema.safeParse(rawQuery);
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
     const format = c.req.query("format") ?? "json";
-    const events = analytics.exportEvents(parsed.data);
+    if (!hasPermission(c, "audit:export")) {
+      return c.json({ error: "Insufficient permissions" }, 403);
+    }
+    const scopedQuery = scopeQueryByKeyPrefix(c, parsed.data);
+    if (scopedQuery instanceof Response) return scopedQuery;
+    const events = analytics.exportEvents(scopedQuery);
     if (format === "csv") {
       const csvEscape = (v: unknown): string => {
         const s = String(v ?? "");
@@ -853,6 +1029,15 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
       );
       return c.body(csv);
     }
+    if (format === "jsonl") {
+      const jsonl = events.map((e) => JSON.stringify(e)).join("\n");
+      c.header("Content-Type", "application/x-ndjson; charset=utf-8");
+      c.header(
+        "Content-Disposition",
+        `attachment; filename="audit-events-${new Date().toISOString().slice(0, 10)}.jsonl"`,
+      );
+      return c.body(jsonl);
+    }
     return c.json({ data: events, total: events.length });
   });
 
@@ -871,7 +1056,9 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
-    const rollups = analytics.queryRollups(parsed.data);
+    const scopedQuery = scopeQueryByKeyPrefix(c, parsed.data);
+    if (scopedQuery instanceof Response) return scopedQuery;
+    const rollups = analytics.queryRollups(scopedQuery);
     return c.json({ data: rollups, total: rollups.length });
   });
 
@@ -881,12 +1068,14 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
-    const result = analytics.getHitRate({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-      project: c.req.query("project"),
-    });
+    const result = analytics.getHitRate(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+        project: c.req.query("project"),
+      }),
+    );
     return c.json(result);
   });
 
@@ -896,11 +1085,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
-    const result = analytics.getUserUsage({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getUserUsage(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
     return c.json({ data: result, total: result.length });
   });
 
@@ -910,11 +1101,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
-    const result = analytics.getProjectUsage({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getProjectUsage(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
     return c.json({ data: result, total: result.length });
   });
 
@@ -924,11 +1117,13 @@ export function createAdminRoutes(deps: AdminRouteDeps): Hono<Env> {
     if (!parsed.success) {
       return c.json({ error: "Invalid query parameters" }, 400);
     }
-    const result = analytics.getErrorRate({
-      from: parsed.data.from,
-      to: parsed.data.to,
-      range: parsed.data.range,
-    });
+    const result = analytics.getErrorRate(
+      withScopedKeyPrefixFilter(c, {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        range: parsed.data.range,
+      }),
+    );
     return c.json(result);
   });
 

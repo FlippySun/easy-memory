@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-03-09
+
+### Added
+
+- **[Ownership] Deterministic remediation service**: 新增 `MemoryOwnershipService` 与 `/api/admin/memories/ownership/remediate`，支持基于 prefix history + MCP audit `memory_id` 证据的 owner 回填，保持 `dry_run` / `apply` 双模式。
+- **[Security] Stable ownership ledger**: 新增 `key_prefix_history`、`owner_user_id` 与历史 prefix 查询能力，为 key 轮转/吊销后的持续授权与回溯提供稳定账本。
+- **[Tests] Exact-prefix guardrails**: 新增 legacy prefix ambiguity 护栏测试，覆盖 remediation、analytics、memory routes ACL、`/api/status` 边界收口与 user-scoped audit/analytics 回归。
+
+### Changed
+
+- **[API] User-scoped visibility**: `save` / `search` / `forget`、Memory Browser、Audit、Analytics 与 admin routes 全部接入稳定用户归属与历史 prefix 作用域，普通用户现在仅能访问自己的记忆/审计/分析数据。
+- **[API] Managed key status boundary**: `GET /api/status` 对 managed API key 强制 `status:read` scope，并返回最小化健康视图；完整诊断继续保留给 master / 内部 MCP。
+- **[Audit] Prefix identity alignment**: managed key 的审计 prefix 与 `ApiKeyRecord.prefix` 统一，避免继续使用历史 8 字符摘要导致的归属漂移。
+- **[Web] Scoped UX polish**: `MemoryBrowser`、`AuditLogs`、`Analytics` 增强了 user/admin 文案分流、过滤态统计、项目选择与降级提示。
+
+### Fixed
+
+- **[Security] No fuzzy legacy prefix matching**: 修复/锁死 8/16 prefix 混用路径，拒绝在 live ACL、analytics scope、ownership remediation 中引入模糊匹配，歧义证据继续 fail-closed。
+- **[Audit/Analytics] Export consistency**: 审计导出分页窗口、过滤条件、legacy export alias 与 audit logs 主查询保持一致。
+
+### Tests
+
+- **发布前验证**: user-scoped / ownership / status 相关定向回归已通过（`tests/services/memory-ownership.test.ts`、`tests/services/analytics.test.ts`、`tests/api/memory-routes.test.ts`、`tests/api/server.test.ts`、`tests/tools/status.test.ts`、`tests/phase2-auth-audit.test.ts`）。
+
 ## [0.5.5] - 2026-03-07
 
 ### Added

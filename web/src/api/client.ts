@@ -543,7 +543,11 @@ export const memoryApi = {
       options,
     ),
   /** 获取所有 collection 统计 */
-  stats: () => api.get<MemoryStatsResponse>("/memories/stats"),
+  stats: (params?: string, options?: RequestInit) =>
+    api.get<MemoryStatsResponse>(
+      `/memories/stats${params ? `?${params}` : ""}`,
+      options,
+    ),
   /** 更新记忆属性 (lifecycle, weight, tags 等) */
   patch: (project: string, id: string, body: MemoryPatchBody) =>
     api.patch<{ ok: boolean; updated: string[] }>(

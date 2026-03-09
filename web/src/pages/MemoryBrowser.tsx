@@ -20,14 +20,19 @@ import {
   LayoutGrid,
   List,
 } from "lucide-react";
+import { useAuth } from "../contexts/auth";
 
 type ViewMode = "card" | "table";
 
 export function MemoryBrowserPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<MemoryStatsResponse | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
   const [nextOffset, setNextOffset] = useState<string | null>(null);
   const [offsets, setOffsets] = useState<string[]>([""]); // stack of offsets for pagination
   const [pageIndex, setPageIndex] = useState(0);
@@ -39,22 +44,38 @@ export function MemoryBrowserPage() {
     project: "",
     memory_scope: "",
     memory_type: "",
-    lifecycle: "",
+    lifecycle: "active",
     device_id: "",
     git_branch: "",
     tag: "",
   });
 
   const abortRef = useRef<AbortController | null>(null);
+  const statsAbortRef = useRef<AbortController | null>(null);
+  const fetchMemoriesRef = useRef<() => Promise<void>>(async () => {});
   const pageSize = 20;
+  const selectedProject = filters.project.trim();
 
-  // Load stats on mount
-  useEffect(() => {
-    memoryApi
-      .stats()
-      .then(setStats)
-      .catch(() => {});
-  }, []);
+  const buildFilterParams = useCallback(
+    (options: { alignWithBrowseDefaults?: boolean } = {}) => {
+      const params = new URLSearchParams();
+      const project = filters.project.trim();
+      const lifecycle =
+        filters.lifecycle || (options.alignWithBrowseDefaults ? "active" : "");
+
+      if (project) params.set("project", project);
+      if (filters.memory_scope)
+        params.set("memory_scope", filters.memory_scope);
+      if (filters.memory_type) params.set("memory_type", filters.memory_type);
+      if (lifecycle) params.set("lifecycle", lifecycle);
+      if (filters.device_id) params.set("device_id", filters.device_id);
+      if (filters.git_branch) params.set("git_branch", filters.git_branch);
+      if (filters.tag) params.set("tag", filters.tag);
+
+      return params;
+    },
+    [filters],
+  );
 
   const fetchMemories = useCallback(async () => {
     abortRef.current?.abort();
@@ -64,18 +85,16 @@ export function MemoryBrowserPage() {
     setError(null);
 
     try {
-      const params = new URLSearchParams();
+      const params = buildFilterParams({ alignWithBrowseDefaults: true });
+      if (!params.get("project")) {
+        setMemories([]);
+        setNextOffset(null);
+        return;
+      }
+
       params.set("limit", String(pageSize));
       const currentOffset = offsets[pageIndex];
       if (currentOffset) params.set("offset", currentOffset);
-      if (filters.project) params.set("project", filters.project);
-      if (filters.memory_scope)
-        params.set("memory_scope", filters.memory_scope);
-      if (filters.memory_type) params.set("memory_type", filters.memory_type);
-      if (filters.lifecycle) params.set("lifecycle", filters.lifecycle);
-      if (filters.device_id) params.set("device_id", filters.device_id);
-      if (filters.git_branch) params.set("git_branch", filters.git_branch);
-      if (filters.tag) params.set("tag", filters.tag);
 
       const res = await memoryApi.browse(params.toString(), {
         signal: controller.signal,
@@ -95,7 +114,11 @@ export function MemoryBrowserPage() {
         setLoading(false);
       }
     }
-  }, [pageIndex, offsets, filters]);
+  }, [buildFilterParams, pageIndex, offsets]);
+
+  useEffect(() => {
+    fetchMemoriesRef.current = fetchMemories;
+  }, [fetchMemories]);
 
   useEffect(() => {
     fetchMemories();
@@ -104,8 +127,45 @@ export function MemoryBrowserPage() {
     };
   }, [fetchMemories]);
 
+  useEffect(() => {
+    statsAbortRef.current?.abort();
+    const controller = new AbortController();
+    statsAbortRef.current = controller;
+    setStatsLoading(true);
+    setStatsError(null);
+    setStats(null);
+
+    memoryApi
+      .stats(buildFilterParams({ alignWithBrowseDefaults: true }).toString(), {
+        signal: controller.signal,
+      })
+      .then((res) => {
+        if (!controller.signal.aborted) {
+          setStats(res);
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setStats(null);
+        setStatsError(
+          err instanceof ApiError
+            ? err.message
+            : "Failed to load memory summary",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setStatsLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [buildFilterParams]);
+
   const goNext = () => {
-    if (!nextOffset) return;
+    if (!nextOffset || loading) return;
     setOffsets((prev) => {
       const next = [...prev];
       if (next.length <= pageIndex + 1) {
@@ -117,7 +177,7 @@ export function MemoryBrowserPage() {
   };
 
   const goPrev = () => {
-    if (pageIndex <= 0) return;
+    if (pageIndex <= 0 || loading) return;
     setPageIndex((p) => p - 1);
   };
 
@@ -130,7 +190,7 @@ export function MemoryBrowserPage() {
     setPatchingIds((prev) => new Set(prev).add(mem.id));
     try {
       await memoryApi.patch(mem.project, mem.id, { lifecycle: "archived" });
-      await fetchMemories();
+      await fetchMemoriesRef.current();
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : "Failed to archive memory",
@@ -161,7 +221,7 @@ export function MemoryBrowserPage() {
     try {
       await memoryApi.patch(mem.project, mem.id, editForm);
       setEditingId(null);
-      await fetchMemories();
+      await fetchMemoriesRef.current();
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : "Failed to update memory",
@@ -206,7 +266,9 @@ export function MemoryBrowserPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Memory Browser</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Browse, edit and manage stored memories
+            {isAdmin
+              ? "Browse, edit and manage stored memories"
+              : "Browse, edit and manage your own memories"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -235,31 +297,53 @@ export function MemoryBrowserPage() {
 
       {/* Stats Bar */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-            <p className="text-2xl font-bold text-slate-900">
-              {stats.total_memories.toLocaleString()}
-            </p>
-            <p className="text-xs text-slate-500 mt-1">Total Memories</p>
-          </div>
-          <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-            <p className="text-2xl font-bold text-slate-900">
-              {stats.total_projects}
-            </p>
-            <p className="text-xs text-slate-500 mt-1">Projects</p>
-          </div>
-          {stats.collections.slice(0, 2).map((col) => (
-            <div
-              key={col.name}
-              className="bg-white rounded-xl border border-slate-200 p-4 text-center"
-            >
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
               <p className="text-2xl font-bold text-slate-900">
-                {col.points_count.toLocaleString()}
+                {stats.total_memories.toLocaleString()}
               </p>
-              <p className="text-xs text-slate-500 mt-1 truncate">{col.name}</p>
+              <p className="text-xs text-slate-500 mt-1">
+                {isAdmin ? "Visible Memories" : "Your Visible Memories"}
+              </p>
             </div>
-          ))}
+            <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
+              <p className="text-2xl font-bold text-slate-900">
+                {stats.total_projects}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {isAdmin ? "Visible Projects" : "Your Visible Projects"}
+              </p>
+            </div>
+            {stats.collections.slice(0, 2).map((col) => (
+              <div
+                key={col.name}
+                className="bg-white rounded-xl border border-slate-200 p-4 text-center"
+              >
+                <p className="text-2xl font-bold text-slate-900">
+                  {col.points_count.toLocaleString()}
+                </p>
+                <p className="text-xs text-slate-500 mt-1 truncate">
+                  {col.project}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">
+            {selectedProject
+              ? "Summary reflects the current browser filters and visible scope."
+              : "Summary reflects all visible projects in your current scope. Select a project below to browse individual memories."}
+          </p>
         </div>
+      )}
+
+      {statsError && (
+        <Card>
+          <div className="flex items-center gap-3 text-amber-700">
+            <AlertCircle size={18} />
+            <p className="text-sm font-medium">{statsError}</p>
+          </div>
+        </Card>
       )}
 
       {/* Filters */}
@@ -361,6 +445,39 @@ export function MemoryBrowserPage() {
             <AlertCircle size={20} />
             <p className="text-sm font-medium">{error}</p>
           </div>
+        </Card>
+      ) : !selectedProject ? (
+        <Card>
+          <EmptyState
+            icon={<Database size={32} />}
+            title="Select a Project to Browse"
+            description={
+              statsLoading
+                ? "Loading visible projects in your current scope..."
+                : stats?.total_projects
+                  ? "Memory browsing is project-scoped. Pick one of your visible projects to load its memories."
+                  : "No visible projects are currently available in your scope."
+            }
+          />
+          {stats?.collections.length ? (
+            <div className="mt-4 flex flex-wrap gap-2 justify-center">
+              {stats.collections.slice(0, 6).map((col) => (
+                <button
+                  key={col.name}
+                  onClick={() => {
+                    setFilters((p) => ({ ...p, project: col.project }));
+                    resetPagination();
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  <span>{col.project}</span>
+                  <span className="text-xs text-slate-400">
+                    {col.points_count.toLocaleString()}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </Card>
       ) : memories.length === 0 ? (
         <Card>
@@ -619,25 +736,27 @@ export function MemoryBrowserPage() {
       )}
 
       {/* Pagination */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-slate-500">Page {pageIndex + 1}</p>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={goPrev}
-            disabled={pageIndex === 0}
-            className="p-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            onClick={goNext}
-            disabled={!nextOffset}
-            className="p-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-          >
-            <ChevronRight size={16} />
-          </button>
+      {selectedProject && !loading && !error && memories.length > 0 && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-slate-500">Page {pageIndex + 1}</p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={goPrev}
+              disabled={pageIndex === 0 || loading}
+              className="p-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              onClick={goNext}
+              disabled={!nextOffset || loading}
+              className="p-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

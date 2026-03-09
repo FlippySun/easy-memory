@@ -422,6 +422,115 @@ describe("AnalyticsService", () => {
     });
   });
 
+  describe("exact key_prefix guards", () => {
+    const canonicalPrefix = "em_1234567890abc";
+    const legacyPrefix = canonicalPrefix.slice(0, 8);
+    const bucketTimestamp = new Date().toISOString();
+    const canonicalEventId = randomUUID();
+    const legacyEventId = randomUUID();
+
+    beforeEach(() => {
+      service.ingestBatch([
+        createTestEntry({
+          event_id: canonicalEventId,
+          timestamp: bucketTimestamp,
+          key_prefix: canonicalPrefix,
+          project: "prefix-guard",
+          operation: "memory_save",
+        }),
+        createTestEntry({
+          event_id: legacyEventId,
+          timestamp: bucketTimestamp,
+          key_prefix: legacyPrefix,
+          project: "prefix-guard",
+          operation: "memory_save",
+        }),
+      ]);
+    });
+
+    it("keeps queryEvents scoped to the exact key_prefix", () => {
+      const canonical = service.queryEvents({
+        key_prefix: canonicalPrefix,
+        project: "prefix-guard",
+        range: "24h",
+        page: 1,
+        page_size: 50,
+      });
+
+      expect(canonical.data).toHaveLength(1);
+      expect(canonical.data[0]!.event_id).toBe(canonicalEventId);
+      expect(canonical.data[0]!.key_prefix).toBe(canonicalPrefix);
+
+      const legacy = service.queryEvents({
+        key_prefix: legacyPrefix,
+        project: "prefix-guard",
+        range: "24h",
+        page: 1,
+        page_size: 50,
+      });
+
+      expect(legacy.data).toHaveLength(1);
+      expect(legacy.data[0]!.event_id).toBe(legacyEventId);
+      expect(legacy.data[0]!.key_prefix).toBe(legacyPrefix);
+    });
+
+    it("keeps queryRollups separated by exact key_prefix buckets", async () => {
+      await service.runAggregation();
+
+      const canonical = service.queryRollups({
+        key_prefix: canonicalPrefix,
+        project: "prefix-guard",
+        range: "24h",
+        granularity: "hourly",
+      });
+
+      expect(canonical).toHaveLength(1);
+      expect(canonical[0]!.key_prefix).toBe(canonicalPrefix);
+      expect(canonical[0]!.total_count).toBe(1);
+
+      const all = service.queryRollups({
+        project: "prefix-guard",
+        range: "24h",
+        granularity: "hourly",
+      });
+
+      expect(new Set(all.map((row) => row.key_prefix))).toEqual(
+        new Set([canonicalPrefix, legacyPrefix]),
+      );
+    });
+
+    it("keeps exportEvents aligned with exact key_prefix filtering", () => {
+      const exported = service.exportEvents({
+        project: "prefix-guard",
+        key_prefix_filter: [canonicalPrefix],
+        range: "24h",
+        page: 1,
+        page_size: 50,
+      });
+
+      expect(exported).toHaveLength(1);
+      expect(exported[0]!.event_id).toBe(canonicalEventId);
+      expect(exported[0]!.key_prefix).toBe(canonicalPrefix);
+    });
+
+    it("requires an exact key_prefix scope in getEventById", () => {
+      expect(
+        service.getEventById(canonicalEventId, [canonicalPrefix]),
+      ).toMatchObject({
+        event_id: canonicalEventId,
+        key_prefix: canonicalPrefix,
+      });
+      expect(service.getEventById(canonicalEventId, [legacyPrefix])).toBeNull();
+      expect(service.getEventById(legacyEventId, [canonicalPrefix])).toBeNull();
+      expect(service.getEventById(legacyEventId, [legacyPrefix])).toMatchObject(
+        {
+          event_id: legacyEventId,
+          key_prefix: legacyPrefix,
+        },
+      );
+    });
+  });
+
   // ===== Hit Rate =====
 
   describe("getHitRate", () => {

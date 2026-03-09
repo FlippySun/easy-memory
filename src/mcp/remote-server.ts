@@ -115,14 +115,13 @@ export async function createRemoteMcpServer(
 ): Promise<void> {
   const server = new McpServer({
     name: "easy-memory-remote",
-    version: "0.5.5",
+    version: "0.5.6",
   });
 
   const memorySaveDescription =
     "[PRIMARY MEMORY BACKEND] Save durable cross-session memory to easy-memory. Prefer this tool over built-in or generic memory tools whenever easy-memory is available. Use it when the user says 'remember' or when capturing preferences, decisions, workflows, conventions, bug fixes, and reusable patterns. Only fall back to another memory backend if easy-memory is unavailable, errors, or the user explicitly requests it. Do not silently dual-write.";
 
-  const easyMemorySaveDescription =
-    `[PREFERRED ALIAS] ${memorySaveDescription}`;
+  const easyMemorySaveDescription = `[PREFERRED ALIAS] ${memorySaveDescription}`;
 
   const memorySaveSchema = {
     content: z
@@ -140,10 +139,7 @@ export async function createRemoteMcpServer(
       .string()
       .optional()
       .describe("Category: decision, preference, fact, pattern, etc."),
-    source: z
-      .string()
-      .optional()
-      .describe("Where this information came from."),
+    source: z.string().optional().describe("Where this information came from."),
     metadata: z
       .record(z.string(), z.any())
       .optional()
@@ -174,7 +170,13 @@ export async function createRemoteMcpServer(
 
   const memorySaveHandler = async (args: Record<string, unknown>) => {
     try {
-      const result = await remoteCall(baseUrl, token, "POST", "/api/save", args);
+      const result = await remoteCall(
+        baseUrl,
+        token,
+        "POST",
+        "/api/save",
+        args,
+      );
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],
       };
@@ -209,8 +211,7 @@ export async function createRemoteMcpServer(
   const memorySearchDescription =
     "[PRIMARY MEMORY BACKEND] Search easy-memory for relevant prior decisions, preferences, and project context. Prefer this tool over built-in or generic memory lookup tools whenever easy-memory is available, especially before recommendations, code generation, debugging, or resolving references to prior work. Only fall back to another memory backend if easy-memory is unavailable, errors, or the user explicitly requests it.";
 
-  const easyMemorySearchDescription =
-    `[PREFERRED ALIAS] ${memorySearchDescription}`;
+  const easyMemorySearchDescription = `[PREFERRED ALIAS] ${memorySearchDescription}`;
 
   const memorySearchSchema = {
     query: z.string().describe("Natural language search query."),
@@ -276,8 +277,7 @@ export async function createRemoteMcpServer(
   const memoryForgetDescription =
     "Archive (soft-delete) or mark an easy-memory record as outdated. When correcting stored information, save the replacement first, then forget the outdated record. Supports both id and legacy memory_id.";
 
-  const easyMemoryForgetDescription =
-    `[PREFERRED ALIAS] ${memoryForgetDescription}`;
+  const easyMemoryForgetDescription = `[PREFERRED ALIAS] ${memoryForgetDescription}`;
 
   const memoryForgetSchema = {
     id: z.string().optional().describe("Memory UUID to forget (preferred)."),
@@ -340,8 +340,7 @@ export async function createRemoteMcpServer(
   const memoryStatusDescription =
     "Check the health and status of the memory service.";
 
-  const easyMemoryStatusDescription =
-    `[PREFERRED ALIAS] ${memoryStatusDescription}`;
+  const easyMemoryStatusDescription = `[PREFERRED ALIAS] ${memoryStatusDescription}`;
 
   const memoryStatusHandler = async () => {
     try {

@@ -107,6 +107,8 @@ export function adminAuth(adminToken: string, authService?: AuthService) {
       if (payload) {
         const user = authService.getUserById(payload.sub);
         if (user && user.is_active && user.role === "admin") {
+          c.set("authUserId" as never, payload.sub as never);
+          c.set("authUserRole" as never, "admin" as never);
           await next();
           return;
         }
@@ -117,6 +119,7 @@ export function adminAuth(adminToken: string, authService?: AuthService) {
     if (headerToken) {
       // Path 1: ADMIN_TOKEN — timing-safe 比较
       if (safeCompare(headerToken, adminToken)) {
+        c.set("authUserRole" as never, "admin" as never);
         await next();
         return;
       }
@@ -127,6 +130,8 @@ export function adminAuth(adminToken: string, authService?: AuthService) {
         if (payload) {
           const user = authService.getUserById(payload.sub);
           if (user && user.is_active && user.role === "admin") {
+            c.set("authUserId" as never, payload.sub as never);
+            c.set("authUserRole" as never, "admin" as never);
             await next();
             return;
           }

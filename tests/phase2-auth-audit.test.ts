@@ -18,7 +18,15 @@
  * 使用真实 SQLite (tmp) + 真实 RateLimiter + 真实 AuditService。
  */
 
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  afterAll,
+  beforeEach,
+} from "vitest";
 import { createApp } from "../src/api/server.js";
 import type { AppContainer } from "../src/container.js";
 import type { AppConfig } from "../src/container.js";
@@ -311,7 +319,9 @@ describe("Fix #2: 双层鉴权 (Dual-Auth)", () => {
     const app = createApp(container);
 
     const res = await app.request("/api/status", {
-      headers: { Authorization: `Basic ${Buffer.from("user:pass").toString("base64")}` },
+      headers: {
+        Authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+      },
     });
 
     expect(res.status).toBe(401);
@@ -408,10 +418,7 @@ describe("Fix #2+#5: Per-Key Ban 检查", () => {
     const container = buildContainer();
     const app = createApp(container);
 
-    const created = apiKeyManager.createKey(
-      { name: "key-to-ban" },
-      "system",
-    );
+    const created = apiKeyManager.createKey({ name: "key-to-ban" }, "system");
 
     // Ban this key
     banManager.createBan(
@@ -575,7 +582,10 @@ describe("Fix #1: 审计中间件 (Audit Middleware)", () => {
     expect(auditRecordSpy).toHaveBeenCalledTimes(1);
 
     // 验证 buildEntry 参数
-    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<string, unknown>;
+    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
     expect(buildArgs.operation).toBe("memory_status");
     expect(buildArgs.httpMethod).toBe("GET");
     expect(buildArgs.httpPath).toBe("/api/status");
@@ -600,11 +610,14 @@ describe("Fix #1: 审计中间件 (Audit Middleware)", () => {
     });
 
     expect(auditBuildEntrySpy).toHaveBeenCalledTimes(1);
-    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<string, unknown>;
+    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
 
-    // keyPrefix 应该是 key_hash 的前 8 字符
+    // keyPrefix 应该与 API key record.prefix 保持一致
     const keyRecord = apiKeyManager.validateKey(created.key!);
-    const expectedPrefix = keyRecord!.key_hash.slice(0, 8);
+    const expectedPrefix = keyRecord!.prefix;
     expect(buildArgs.keyPrefix).toBe(expectedPrefix);
   });
 
@@ -625,7 +638,10 @@ describe("Fix #1: 审计中间件 (Audit Middleware)", () => {
     });
 
     expect(auditBuildEntrySpy).toHaveBeenCalledTimes(1);
-    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<string, unknown>;
+    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
     expect(buildArgs.operation).toBe("memory_save");
     expect(buildArgs.project).toBe("my-project");
     expect(buildArgs.httpMethod).toBe("POST");
@@ -655,7 +671,10 @@ describe("Fix #1: 审计中间件 (Audit Middleware)", () => {
       },
     });
 
-    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<string, unknown>;
+    const buildArgs = auditBuildEntrySpy.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
     expect(buildArgs.clientIp).toBe("203.0.113.42");
   });
 

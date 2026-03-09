@@ -350,12 +350,17 @@ export interface PaginatedResponse<T> {
   };
 }
 
+const MANAGED_KEY_PREFIX_LENGTH = 16;
+const DEFAULT_KEY_PREFIX_LENGTH = 8;
+
 // =========================================================================
 // Utility Functions
 // =========================================================================
 
 /**
- * 从 Bearer token 提取前缀 (前 8 字符)。
+ * 从 Bearer token 提取前缀。
+ * - managed API key (`em_...`)：提取与持久 owner prefix 对齐的前 16 字符
+ * - 其他 token：保留历史 8 字符摘要行为
  * 永不暴露完整 token。
  */
 export function extractKeyPrefix(authHeader: string | undefined): string {
@@ -364,7 +369,9 @@ export function extractKeyPrefix(authHeader: string | undefined): string {
   if (spaceIdx === -1) return "";
   const token = authHeader.slice(spaceIdx + 1).trim();
   if (!token) return "";
-  return token.slice(0, 8);
+  return token.startsWith("em_")
+    ? token.slice(0, MANAGED_KEY_PREFIX_LENGTH)
+    : token.slice(0, DEFAULT_KEY_PREFIX_LENGTH);
 }
 
 /**

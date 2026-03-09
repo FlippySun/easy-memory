@@ -20,6 +20,12 @@ import {
 // =========================================================================
 
 describe("extractKeyPrefix", () => {
+  it("should extract managed key identity prefix from Bearer token", () => {
+    expect(extractKeyPrefix("Bearer em_abcdefghijklmnop")).toBe(
+      "em_abcdefghijklm",
+    );
+  });
+
   it("should extract first 8 chars from Bearer token", () => {
     expect(extractKeyPrefix("Bearer abcdefghijklmnop")).toBe("abcdefgh");
   });

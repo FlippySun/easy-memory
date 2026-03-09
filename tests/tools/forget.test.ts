@@ -93,6 +93,48 @@ describe("handleForget", () => {
     expect(result.message).toContain("not found");
   });
 
+  it("should hide foreign memories from scoped callers", async () => {
+    deps.callerUserId = 42;
+    deps.callerOwnedKeyPrefixes = ["em_caller_prefix"];
+    (deps.qdrant as any).getPointPayload.mockResolvedValueOnce({
+      lifecycle: "active",
+      owner_user_id: 99,
+      owner_key_prefix: "em_other_prefix",
+    });
+
+    const result = await handleForget(
+      { id: VALID_UUID, action: "archive", reason: "test" },
+      deps,
+    );
+
+    expect(result.status).toBe("not_found");
+    expect(deps.qdrant.setPayload).not.toHaveBeenCalled();
+  });
+
+  it("should allow scoped callers to forget memories via historical key prefix fallback", async () => {
+    deps.callerUserId = 42;
+    deps.callerOwnedKeyPrefixes = ["em_old_prefix"];
+    (deps.qdrant as any).getPointPayload.mockResolvedValueOnce({
+      lifecycle: "active",
+      owner_key_prefix: "em_old_prefix",
+    });
+
+    const result = await handleForget(
+      { id: VALID_UUID, action: "archive", reason: "historical ownership" },
+      deps,
+    );
+
+    expect(result.status).toBe("archived");
+    expect(deps.qdrant.setPayload).toHaveBeenCalledWith(
+      "test-project",
+      VALID_UUID,
+      expect.objectContaining({
+        lifecycle: "archived",
+        forget_reason: "historical ownership",
+      }),
+    );
+  });
+
   it("should return not_found on Qdrant 'Not Found' (uppercase) error", async () => {
     // setPayload throws after getPointPayload succeeds
     (deps.qdrant.setPayload as ReturnType<typeof vi.fn>).mockRejectedValueOnce(

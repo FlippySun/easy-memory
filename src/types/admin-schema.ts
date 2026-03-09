@@ -50,6 +50,7 @@ export const ADMIN_ACTION = [
   "key_semi_delete",
   "key_update",
   "key_rotate",
+  "memory_ownership_remediate",
   "ban_create",
   "ban_remove",
   "config_update",

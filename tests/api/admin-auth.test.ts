@@ -20,6 +20,7 @@ function createTestApp(adminToken: string) {
     return c.json({
       prefix: getAdminKeyPrefix(c),
       ip: getClientIp(c),
+      role: c.get("authUserRole" as never) ?? null,
     });
   });
   return app;
@@ -32,6 +33,8 @@ describe("adminAuth middleware", () => {
       headers: { Authorization: "Bearer secret-admin-token" },
     });
     expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.role).toBe("admin");
   });
 
   it("rejects invalid token with 401", async () => {
@@ -150,11 +153,7 @@ describe("adminOrUserAuth middleware", () => {
     const app = new Hono();
     app.use(
       "/admin/*",
-      adminOrUserAuth(
-        "secret-admin-token",
-        mockAuthService,
-        "settings:write",
-      ),
+      adminOrUserAuth("secret-admin-token", mockAuthService, "settings:write"),
     );
     app.get("/admin/test", (c) => c.json({ ok: true }));
 

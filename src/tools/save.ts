@@ -152,6 +152,8 @@ export interface SaveHandlerDeps {
   embeddingModel?: string;
   /** Web UI: 调用者 API Key 前缀，用于数据隔离归属 */
   callerKeyPrefix?: string;
+  /** 稳定用户 ID（若调用者 API Key 归属于某个用户） */
+  callerUserId?: number;
 }
 
 /**
@@ -327,6 +329,9 @@ export async function handleSave(
       ...(input.device_id ? { device_id: input.device_id } : {}),
       ...(input.git_branch ? { git_branch: input.git_branch } : {}),
       owner_key_prefix: deps.callerKeyPrefix ?? "",
+      ...(deps.callerUserId != null
+        ? { owner_user_id: deps.callerUserId }
+        : {}),
     };
 
     await deps.qdrant.upsert(project, [

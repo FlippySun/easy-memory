@@ -10,8 +10,11 @@ import {
   X,
   ExternalLink,
 } from "lucide-react";
+import { useAuth } from "../contexts/auth";
 
 export function AuditLogsPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [logs, setLogs] = useState<AdminAuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +33,14 @@ export function AuditLogsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const pageSize = 50;
   const abortRef = useRef<AbortController | null>(null);
+  const detailAbortRef = useRef<AbortController | null>(null);
+
+  const closeDetail = useCallback(() => {
+    detailAbortRef.current?.abort();
+    detailAbortRef.current = null;
+    setDetailLoading(false);
+    setSelectedEvent(null);
+  }, []);
 
   const fetchLogs = useCallback(async () => {
     abortRef.current?.abort();
@@ -78,7 +89,15 @@ export function AuditLogsPage() {
 
   const totalPages = Math.ceil(total / pageSize);
 
-  const detailAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    closeDetail();
+  }, [page, filters, closeDetail]);
+
+  useEffect(() => {
+    return () => {
+      detailAbortRef.current?.abort();
+    };
+  }, []);
 
   const handleRowClick = useCallback(async (entry: AdminAuditLogEntry) => {
     detailAbortRef.current?.abort();
@@ -124,7 +143,9 @@ export function AuditLogsPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Detailed operation audit trail
+          {isAdmin
+            ? "Detailed operation audit trail"
+            : "Detailed audit trail for your own activity"}
         </p>
       </div>
 
@@ -198,7 +219,9 @@ export function AuditLogsPage() {
             <option value="branch">branch</option>
           </select>
           <span className="ml-auto text-xs text-slate-500">
-            {total.toLocaleString()} total records
+            {loading
+              ? "Loading records..."
+              : `${total.toLocaleString()} total records`}
           </span>
         </div>
       </Card>
@@ -307,7 +330,7 @@ export function AuditLogsPage() {
       </Card>
 
       {/* Pagination */}
-      {totalPages > 1 && (
+      {!loading && totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-slate-500">
             Page {page} of {totalPages}
@@ -334,10 +357,7 @@ export function AuditLogsPage() {
       {/* Detail Drawer */}
       {selectedEvent && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <div
-            className="absolute inset-0 bg-black/30"
-            onClick={() => setSelectedEvent(null)}
-          />
+          <div className="absolute inset-0 bg-black/30" onClick={closeDetail} />
           <div className="relative w-full max-w-lg bg-white shadow-xl overflow-y-auto animate-slide-in">
             <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -345,7 +365,7 @@ export function AuditLogsPage() {
                 <h2 className="font-semibold text-slate-900">Event Detail</h2>
               </div>
               <button
-                onClick={() => setSelectedEvent(null)}
+                onClick={closeDetail}
                 className="p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
               >
                 <X size={18} />

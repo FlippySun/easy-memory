@@ -67,6 +67,8 @@ export const MemoryMetadataSchema = z.object({
   weight: z.number().min(0).max(10).default(1.0),
   /** 记忆所有者的 API Key 前缀 — 用于用户级隔离 */
   owner_key_prefix: z.string().default(""),
+  /** 稳定的用户所有者 ID — 用于 key 轮转/吊销后的持续授权 */
+  owner_user_id: z.number().int().positive().optional(),
 });
 
 // ===== 类型导出 =====

@@ -496,6 +496,25 @@ export class QdrantService {
   }
 
   /**
+   * 统计满足过滤条件的点数量。
+   */
+  async countPoints(
+    project: string,
+    options: { filter?: Record<string, unknown> } = {},
+  ): Promise<number> {
+    const name = await this.ensureCollection(project);
+    try {
+      const result = await this.client.count(name, {
+        exact: true,
+        ...(options.filter ? { filter: options.filter } : {}),
+      });
+      return Number(result.count ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
    * v0.7.0: 列出所有 em_* Collection 及各自的 points_count。
    * 用于 Memory Browser 存储分布统计和项目列表。
    */

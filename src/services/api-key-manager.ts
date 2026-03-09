@@ -73,12 +73,21 @@ CREATE TABLE IF NOT EXISTS admin_actions (
   client_ip TEXT NOT NULL DEFAULT ''
 );
 
+-- Key prefix ownership history
+CREATE TABLE IF NOT EXISTS key_prefix_history (
+  prefix TEXT PRIMARY KEY,
+  key_id TEXT NOT NULL,
+  user_id INTEGER,
+  created_at TEXT NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_keys_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_keys_prefix ON api_keys(prefix);
 CREATE INDEX IF NOT EXISTS idx_keys_revoked ON api_keys(revoked_at);
 CREATE INDEX IF NOT EXISTS idx_admin_actions_ts ON admin_actions(timestamp);
 CREATE INDEX IF NOT EXISTS idx_admin_actions_action ON admin_actions(action);
+CREATE INDEX IF NOT EXISTS idx_key_prefix_history_user_id ON key_prefix_history(user_id);
 `;
 
 /** 向后兼容迁移 — 为已有数据库添加 user_id 列 */
@@ -112,6 +121,8 @@ export interface ApiKeyManagerConfig {
   keyPrefix?: string;
 }
 
+const API_KEY_PREFIX_LENGTH = 16;
+
 // =========================================================================
 // ApiKeyManager
 // =========================================================================
@@ -133,6 +144,7 @@ export class ApiKeyManager {
   private stmtIncrementRequests: BetterSqlite3.Statement | null = null;
   private stmtRevokeKey: BetterSqlite3.Statement | null = null;
   private stmtInsertAction: BetterSqlite3.Statement | null = null;
+  private stmtInsertPrefixHistory: BetterSqlite3.Statement | null = null;
 
   constructor(config: ApiKeyManagerConfig = {}) {
     this.config = {
@@ -164,6 +176,7 @@ export class ApiKeyManager {
       this.purgeSemiDeletedKeys(30);
 
       this.prepareStatements();
+      this.backfillKeyPrefixHistory();
       this.loadCache();
 
       log.info("ApiKeyManager initialized", {
@@ -225,18 +238,47 @@ export class ApiKeyManager {
   }
 
   /**
-   * v0.7.0: 获取用户关联的所有活跃 API Key 前缀。
-   * 用于 userScopeMiddleware 的数据权限隔离。
+   * 获取用户关联的所有历史 API Key 前缀。
+   *
+   * 与 listKeysByUser 不同：该方法不受 revoked / soft_deleted / semi_deleted /
+   * purge 的当前可见性影响，用于用户历史数据的稳定授权范围。
    */
   getKeyPrefixesByUserId(userId: number): string[] {
-    if (!this.db) return [];
-    const rows = this.db
-      .prepare(
-        `SELECT DISTINCT prefix FROM api_keys
-         WHERE user_id = ? AND revoked_at IS NULL AND soft_deleted_at IS NULL`,
-      )
-      .all(userId) as Array<{ prefix: string }>;
+    this.ensureOpen();
+    const rows = this.db!.prepare(
+      `SELECT DISTINCT prefix FROM key_prefix_history
+         WHERE user_id = ?
+         ORDER BY created_at DESC`,
+    ).all(userId) as Array<{ prefix: string }>;
     return rows.map((r) => r.prefix);
+  }
+
+  /**
+   * 通过 prefix 反查其稳定归属用户。
+   * 返回 null 表示该 prefix 非用户 key，或历史映射不存在。
+   */
+  getUserIdByPrefix(prefix: string): number | null {
+    this.ensureOpen();
+    const row = this.db!.prepare(
+      `SELECT user_id FROM key_prefix_history
+         WHERE prefix = ?
+         LIMIT 1`,
+    ).get(prefix) as { user_id: number | null } | undefined;
+    return row?.user_id ?? null;
+  }
+
+  /**
+   * 判断 prefix 是否曾在历史表中出现过。
+   * 用于 remediation 过滤掉无法在本地身份账本中验证的审计证据。
+   */
+  hasRecordedPrefix(prefix: string): boolean {
+    this.ensureOpen();
+    const row = this.db!.prepare(
+      `SELECT 1 FROM key_prefix_history
+         WHERE prefix = ?
+         LIMIT 1`,
+    ).get(prefix) as { 1: number } | undefined;
+    return Boolean(row);
   }
 
   /**
@@ -269,9 +311,7 @@ export class ApiKeyManager {
     this.ensureOpen();
 
     const id = randomUUID();
-    const plaintextKey = this.generateKey();
-    const keyHash = this.hashKey(plaintextKey);
-    const prefix = plaintextKey.slice(0, 8);
+    const { plaintextKey, keyHash, prefix } = this.generateUniqueKeyMaterial();
     const now = new Date().toISOString();
 
     const scopes = input.scopes ?? DEFAULT_SCOPES;
@@ -295,24 +335,34 @@ export class ApiKeyManager {
       user_id: userId ?? null,
     };
 
-    this.stmtInsertKey!.run(
-      record.id,
-      record.name,
-      record.prefix,
-      record.key_hash,
-      record.created_at,
-      record.expires_at,
-      record.revoked_at,
-      record.soft_deleted_at,
-      record.semi_deleted_at,
-      record.last_used_at,
-      record.rate_limit_per_minute,
-      record.scopes,
-      record.metadata,
-      record.total_requests,
-      record.created_by,
-      record.user_id,
-    );
+    const txn = this.db!.transaction(() => {
+      this.stmtInsertKey!.run(
+        record.id,
+        record.name,
+        record.prefix,
+        record.key_hash,
+        record.created_at,
+        record.expires_at,
+        record.revoked_at,
+        record.soft_deleted_at,
+        record.semi_deleted_at,
+        record.last_used_at,
+        record.rate_limit_per_minute,
+        record.scopes,
+        record.metadata,
+        record.total_requests,
+        record.created_by,
+        record.user_id,
+      );
+      this.recordKeyPrefixHistory(
+        record.prefix,
+        record.id,
+        record.user_id,
+        record.created_at,
+      );
+    });
+
+    txn();
 
     // 更新缓存
     this.cache.set(keyHash, record);
@@ -599,9 +649,11 @@ export class ApiKeyManager {
 
     // 原子操作: 在事务中同时吊销旧 key + 创建新 key
     const newId = randomUUID();
-    const newPlaintextKey = this.generateKey();
-    const newKeyHash = this.hashKey(newPlaintextKey);
-    const newPrefix = newPlaintextKey.slice(0, 8);
+    const {
+      plaintextKey: newPlaintextKey,
+      keyHash: newKeyHash,
+      prefix: newPrefix,
+    } = this.generateUniqueKeyMaterial();
     const now = new Date().toISOString();
 
     const txn = this.db!.transaction(() => {
@@ -626,6 +678,13 @@ export class ApiKeyManager {
         0, // total_requests
         createdBy,
         existing.user_id ?? null, // 继承 user_id
+      );
+
+      this.recordKeyPrefixHistory(
+        newPrefix,
+        newId,
+        existing.user_id ?? null,
+        now,
       );
     });
 
@@ -866,6 +925,77 @@ export class ApiKeyManager {
     return `${this.config.keyPrefix}${random}`;
   }
 
+  private buildKeyPrefix(plaintextKey: string): string {
+    return plaintextKey.slice(0, API_KEY_PREFIX_LENGTH);
+  }
+
+  private prefixExists(prefix: string): boolean {
+    if (!this.db) return false;
+    const row = this.db
+      .prepare("SELECT 1 FROM key_prefix_history WHERE prefix = ? LIMIT 1")
+      .get(prefix) as { 1: number } | undefined;
+    return Boolean(row);
+  }
+
+  private recordKeyPrefixHistory(
+    prefix: string,
+    keyId: string,
+    userId: number | null,
+    createdAt: string,
+  ): void {
+    if (!this.db) return;
+    this.stmtInsertPrefixHistory!.run(prefix, keyId, userId, createdAt);
+  }
+
+  private backfillKeyPrefixHistory(): void {
+    if (!this.db) return;
+    const rows = this.db
+      .prepare(
+        `SELECT prefix, id AS key_id, user_id, created_at
+         FROM api_keys`,
+      )
+      .all() as Array<{
+      prefix: string;
+      key_id: string;
+      user_id: number | null;
+      created_at: string;
+    }>;
+
+    const insert = this.db.prepare(
+      `INSERT OR IGNORE INTO key_prefix_history (
+        prefix, key_id, user_id, created_at
+      ) VALUES (?, ?, ?, ?)`,
+    );
+
+    for (const row of rows) {
+      insert.run(row.prefix, row.key_id, row.user_id, row.created_at);
+    }
+  }
+
+  private generateUniqueKeyMaterial(): {
+    plaintextKey: string;
+    keyHash: string;
+    prefix: string;
+  } {
+    this.ensureOpen();
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const plaintextKey = this.generateKey();
+      const prefix = this.buildKeyPrefix(plaintextKey);
+      if (this.prefixExists(prefix)) {
+        continue;
+      }
+
+      return {
+        plaintextKey,
+        keyHash: this.hashKey(plaintextKey),
+        prefix,
+      };
+    }
+
+    throw new Error("Failed to generate a unique API key prefix");
+  }
+
   /**
    * 对明文 key 计算 SHA-256 hash。
    */
@@ -908,6 +1038,12 @@ export class ApiKeyManager {
         id, timestamp, admin_key_prefix, action, target_type,
         target_id, details, client_ip
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.stmtInsertPrefixHistory = this.db!.prepare(`
+      INSERT OR IGNORE INTO key_prefix_history (
+        prefix, key_id, user_id, created_at
+      ) VALUES (?, ?, ?, ?)
     `);
   }
 

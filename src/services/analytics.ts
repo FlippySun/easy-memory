@@ -706,25 +706,65 @@ export class AnalyticsService {
   // Query API — Admin 查询
   // =========================================================================
 
-  /**
-   * 查询审计事件（分页 + 过滤）。
-   */
-  queryEvents(query: AuditQuery): PaginatedResponse<AuditLogEntry> {
-    if (!this.db) {
-      return {
-        data: [],
-        pagination: { page: 1, page_size: 50, total_count: 0, total_pages: 0 },
-      };
+  private appendKeyPrefixConditions(
+    conditions: string[],
+    params: Record<string, unknown>,
+    scope: {
+      key_prefix?: string | undefined;
+      key_prefix_filter?: string[] | undefined;
+    },
+  ): void {
+    if (scope.key_prefix_filter) {
+      if (scope.key_prefix_filter.length === 0) {
+        conditions.push("1 = 0");
+        return;
+      }
+
+      if (scope.key_prefix) {
+        if (scope.key_prefix_filter.includes(scope.key_prefix)) {
+          conditions.push("key_prefix = @key_prefix");
+          params.key_prefix = scope.key_prefix;
+        } else {
+          conditions.push("1 = 0");
+        }
+        return;
+      }
+
+      const placeholders = scope.key_prefix_filter
+        .map((_, i) => `@scope_kp${i}`)
+        .join(",");
+      conditions.push(`key_prefix IN (${placeholders})`);
+      scope.key_prefix_filter.forEach((kp, i) => {
+        params[`scope_kp${i}`] = kp;
+      });
+      return;
     }
 
-    const { from, to } = resolveTimeRange(query);
-    const conditions: string[] = ["timestamp >= @from AND timestamp <= @to"];
-    const params: Record<string, unknown> = { from, to };
-
-    if (query.key_prefix) {
+    if (scope.key_prefix) {
       conditions.push("key_prefix = @key_prefix");
-      params.key_prefix = query.key_prefix;
+      params.key_prefix = scope.key_prefix;
     }
+  }
+
+  private appendAuditEventConditions(
+    conditions: string[],
+    params: Record<string, unknown>,
+    query: Partial<
+      Pick<
+        AuditQuery,
+        | "key_prefix"
+        | "project"
+        | "operation"
+        | "outcome"
+        | "device_id"
+        | "git_branch"
+        | "memory_scope"
+      >
+    > & {
+      key_prefix_filter?: string[] | undefined;
+    },
+  ): void {
+    this.appendKeyPrefixConditions(conditions, params, query);
     if (query.project) {
       conditions.push("project = @project");
       params.project = query.project;
@@ -749,6 +789,26 @@ export class AnalyticsService {
       conditions.push("memory_scope = @memory_scope");
       params.memory_scope = query.memory_scope;
     }
+  }
+
+  /**
+   * 查询审计事件（分页 + 过滤）。
+   */
+  queryEvents(
+    query: AuditQuery & { key_prefix_filter?: string[] },
+  ): PaginatedResponse<AuditLogEntry> {
+    if (!this.db) {
+      return {
+        data: [],
+        pagination: { page: 1, page_size: 50, total_count: 0, total_pages: 0 },
+      };
+    }
+
+    const { from, to } = resolveTimeRange(query);
+    const conditions: string[] = ["timestamp >= @from AND timestamp <= @to"];
+    const params: Record<string, unknown> = { from, to };
+
+    this.appendAuditEventConditions(conditions, params, query);
 
     const whereClause = conditions.join(" AND ");
 
@@ -794,7 +854,9 @@ export class AnalyticsService {
   /**
    * 查询聚合 rollups — 时间序列数据。
    */
-  queryRollups(query: AnalyticsQuery): AnalyticsRollup[] {
+  queryRollups(
+    query: AnalyticsQuery & { key_prefix_filter?: string[] },
+  ): AnalyticsRollup[] {
     if (!this.db) return [];
 
     const { from, to } = resolveTimeRange(query);
@@ -808,10 +870,7 @@ export class AnalyticsService {
       granularity: query.granularity ?? "hourly",
     };
 
-    if (query.key_prefix) {
-      conditions.push("key_prefix = @key_prefix");
-      params.key_prefix = query.key_prefix;
-    }
+    this.appendKeyPrefixConditions(conditions, params, query);
     if (query.project) {
       conditions.push("project = @project");
       params.project = query.project;
@@ -840,6 +899,7 @@ export class AnalyticsService {
     to?: string | undefined;
     range?: string | undefined;
     project?: string | undefined;
+    key_prefix_filter?: string[];
   }): HitRateMetrics {
     if (!this.db) {
       return {
@@ -854,10 +914,16 @@ export class AnalyticsService {
     }
 
     const { from, to } = resolveTimeRange(params);
-    const projectFilter = params.project ? "AND project = @project" : "";
-
+    const conditions = [
+      "operation = 'memory_search'",
+      "timestamp >= @from AND timestamp <= @to",
+    ];
     const queryParams: Record<string, unknown> = { from, to };
-    if (params.project) queryParams.project = params.project;
+    if (params.project) {
+      conditions.push("project = @project");
+      queryParams.project = params.project;
+    }
+    this.appendKeyPrefixConditions(conditions, queryParams, params);
 
     const result = this.db
       .prepare(
@@ -867,9 +933,7 @@ export class AnalyticsService {
           COALESCE(AVG(top_score), 0) as avg_top_score,
           COALESCE(AVG(result_count), 0) as avg_result_count
         FROM audit_events
-        WHERE operation = 'memory_search'
-          AND timestamp >= @from AND timestamp <= @to
-          ${projectFilter}`,
+        WHERE ${conditions.join(" AND ")}`,
       )
       .get(queryParams) as {
       total_searches: number;
@@ -899,10 +963,14 @@ export class AnalyticsService {
     from?: string | undefined;
     to?: string | undefined;
     range?: string | undefined;
+    key_prefix_filter?: string[];
   }): UserUsageSummary[] {
     if (!this.db) return [];
 
     const { from, to } = resolveTimeRange(params);
+    const conditions = ["timestamp >= @from AND timestamp <= @to"];
+    const queryParams: Record<string, unknown> = { from, to };
+    this.appendKeyPrefixConditions(conditions, queryParams, params);
 
     return this.db
       .prepare(
@@ -919,11 +987,11 @@ export class AnalyticsService {
           MAX(timestamp) as last_active,
           MIN(timestamp) as first_seen
         FROM audit_events
-        WHERE timestamp >= @from AND timestamp <= @to
+        WHERE ${conditions.join(" AND ")}
         GROUP BY key_prefix
         ORDER BY total_operations DESC`,
       )
-      .all({ from, to })
+      .all(queryParams)
       .map((row: unknown) => {
         const r = row as Record<string, unknown>;
         return {
@@ -951,10 +1019,14 @@ export class AnalyticsService {
     from?: string | undefined;
     to?: string | undefined;
     range?: string | undefined;
+    key_prefix_filter?: string[];
   }): ProjectUsageSummary[] {
     if (!this.db) return [];
 
     const { from, to } = resolveTimeRange(params);
+    const conditions = ["timestamp >= @from AND timestamp <= @to"];
+    const queryParams: Record<string, unknown> = { from, to };
+    this.appendKeyPrefixConditions(conditions, queryParams, params);
 
     return this.db
       .prepare(
@@ -973,11 +1045,11 @@ export class AnalyticsService {
           END as search_hit_rate,
           MAX(timestamp) as last_active
         FROM audit_events
-        WHERE timestamp >= @from AND timestamp <= @to
+        WHERE ${conditions.join(" AND ")}
         GROUP BY project
         ORDER BY total_operations DESC`,
       )
-      .all({ from, to })
+      .all(queryParams)
       .map((row: unknown) => {
         const r = row as Record<string, unknown>;
         return {
@@ -1000,6 +1072,7 @@ export class AnalyticsService {
     from?: string | undefined;
     to?: string | undefined;
     range?: string | undefined;
+    key_prefix_filter?: string[];
   }): ErrorRateMetrics {
     if (!this.db) {
       return {
@@ -1015,6 +1088,9 @@ export class AnalyticsService {
     }
 
     const { from, to } = resolveTimeRange(params);
+    const conditions = ["timestamp >= @from AND timestamp <= @to"];
+    const queryParams: Record<string, unknown> = { from, to };
+    this.appendKeyPrefixConditions(conditions, queryParams, params);
 
     const overall = this.db
       .prepare(
@@ -1024,9 +1100,9 @@ export class AnalyticsService {
           SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) as rejected_count,
           SUM(CASE WHEN outcome = 'rate_limited' THEN 1 ELSE 0 END) as rate_limited_count
         FROM audit_events
-        WHERE timestamp >= @from AND timestamp <= @to`,
+        WHERE ${conditions.join(" AND ")}`,
       )
-      .get({ from, to }) as {
+      .get(queryParams) as {
       total_requests: number;
       error_count: number;
       rejected_count: number;
@@ -1040,10 +1116,10 @@ export class AnalyticsService {
           COUNT(*) as total,
           SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) as errors
         FROM audit_events
-        WHERE timestamp >= @from AND timestamp <= @to
+        WHERE ${conditions.join(" AND ")}
         GROUP BY operation`,
       )
-      .all({ from, to }) as Array<{
+      .all(queryParams) as Array<{
       operation: string;
       total: number;
       errors: number;
@@ -1079,35 +1155,35 @@ export class AnalyticsService {
   /**
    * 获取用于 CSV 导出的原始数据。
    */
-  exportEvents(query: AuditQuery): AuditLogEntry[] {
+  exportEvents(
+    query: AuditQuery & { key_prefix_filter?: string[] },
+  ): AuditLogEntry[] {
     if (!this.db) return [];
 
     const { from, to } = resolveTimeRange(query);
     const conditions: string[] = ["timestamp >= @from AND timestamp <= @to"];
     const params: Record<string, unknown> = { from, to };
+    const page = query.page ?? 1;
+    const pageSize = query.page_size ?? 50;
+    const offset = (page - 1) * pageSize;
 
-    if (query.key_prefix) {
-      conditions.push("key_prefix = @key_prefix");
-      params.key_prefix = query.key_prefix;
-    }
-    if (query.project) {
-      conditions.push("project = @project");
-      params.project = query.project;
-    }
-    if (query.operation) {
-      conditions.push("operation = @operation");
-      params.operation = query.operation;
-    }
+    this.appendAuditEventConditions(conditions, params, query);
 
     const whereClause = conditions.join(" AND ");
-    const limit = Math.min((query.page_size ?? 50) * (query.page ?? 1), 10000);
-
-    return this.db
+    const rows = this.db
       .prepare(
         `SELECT * FROM audit_events WHERE ${whereClause}
-         ORDER BY timestamp DESC LIMIT @limit`,
+         ORDER BY timestamp DESC LIMIT @limit OFFSET @offset`,
       )
-      .all({ ...params, limit }) as AuditLogEntry[];
+      .all({ ...params, limit: pageSize, offset }) as AuditLogEntry[];
+
+    return rows.map((r) => ({
+      ...r,
+      search_hit:
+        r.search_hit !== null && r.search_hit !== undefined
+          ? Boolean(r.search_hit)
+          : undefined,
+    })) as AuditLogEntry[];
   }
 
   // =====================================================
@@ -1121,6 +1197,7 @@ export class AnalyticsService {
     from?: string | undefined;
     to?: string | undefined;
     range?: string | undefined;
+    project?: string | undefined;
     key_prefix_filter?: string[];
   }): Array<{ date: string; save_count: number }> {
     if (!this.db) return [];
@@ -1132,12 +1209,10 @@ export class AnalyticsService {
     ];
     const sqlParams: Record<string, unknown> = { from, to };
 
-    if (params.key_prefix_filter?.length) {
-      const placeholders = params.key_prefix_filter
-        .map((_, i) => `@kp${i}`)
-        .join(",");
-      conditions.push(`key_prefix IN (${placeholders})`);
-      params.key_prefix_filter.forEach((kp, i) => (sqlParams[`kp${i}`] = kp));
+    this.appendKeyPrefixConditions(conditions, sqlParams, params);
+    if (params.project) {
+      conditions.push("project = @project");
+      sqlParams.project = params.project;
     }
 
     return this.db
@@ -1158,6 +1233,7 @@ export class AnalyticsService {
     from?: string | undefined;
     to?: string | undefined;
     range?: string | undefined;
+    project?: string | undefined;
     key_prefix_filter?: string[];
   }): Array<{
     date: string;
@@ -1176,12 +1252,10 @@ export class AnalyticsService {
     ];
     const sqlParams: Record<string, unknown> = { from, to };
 
-    if (params.key_prefix_filter?.length) {
-      const placeholders = params.key_prefix_filter
-        .map((_, i) => `@kp${i}`)
-        .join(",");
-      conditions.push(`key_prefix IN (${placeholders})`);
-      params.key_prefix_filter.forEach((kp, i) => (sqlParams[`kp${i}`] = kp));
+    this.appendKeyPrefixConditions(conditions, sqlParams, params);
+    if (params.project) {
+      conditions.push("project = @project");
+      sqlParams.project = params.project;
     }
 
     return this.db
@@ -1216,6 +1290,7 @@ export class AnalyticsService {
     from?: string | undefined;
     to?: string | undefined;
     range?: string | undefined;
+    project?: string | undefined;
     key_prefix_filter?: string[];
   }): Array<{
     operation: string;
@@ -1232,12 +1307,10 @@ export class AnalyticsService {
     ];
     const sqlParams: Record<string, unknown> = { from, to };
 
-    if (params.key_prefix_filter?.length) {
-      const placeholders = params.key_prefix_filter
-        .map((_, i) => `@kp${i}`)
-        .join(",");
-      conditions.push(`key_prefix IN (${placeholders})`);
-      params.key_prefix_filter.forEach((kp, i) => (sqlParams[`kp${i}`] = kp));
+    this.appendKeyPrefixConditions(conditions, sqlParams, params);
+    if (params.project) {
+      conditions.push("project = @project");
+      sqlParams.project = params.project;
     }
 
     // 先获取每个操作的基础统计
@@ -1288,11 +1361,19 @@ export class AnalyticsService {
   /**
    * 获取单条审计日志详情（含完整 content_full, error_stack 等）。
    */
-  getEventById(eventId: string): AuditLogEntry | null {
+  getEventById(
+    eventId: string,
+    keyPrefixFilter?: string[],
+  ): AuditLogEntry | null {
     if (!this.db) return null;
+    const conditions = ["event_id = @event_id"];
+    const params: Record<string, unknown> = { event_id: eventId };
+    this.appendKeyPrefixConditions(conditions, params, {
+      key_prefix_filter: keyPrefixFilter,
+    });
     const row = this.db
-      .prepare(`SELECT * FROM audit_events WHERE event_id = @event_id`)
-      .get({ event_id: eventId }) as AuditLogEntry | undefined;
+      .prepare(`SELECT * FROM audit_events WHERE ${conditions.join(" AND ")}`)
+      .get(params) as AuditLogEntry | undefined;
     return row ?? null;
   }
 }

@@ -87,6 +87,46 @@ function mapStatusToOutcome(status: number): AuditOutcome {
   return "error";
 }
 
+function parseApiKeyScopes(
+  record: import("../types/admin-schema.js").ApiKeyRecord | undefined,
+): string[] {
+  if (!record?.scopes) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(record.scopes) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((scope): scope is string => typeof scope === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function hasApiKeyScope(
+  record: import("../types/admin-schema.js").ApiKeyRecord | undefined,
+  scope: string,
+): boolean {
+  return parseApiKeyScopes(record).includes(scope);
+}
+
+function redactStatusForManagedKey(
+  result: Awaited<ReturnType<typeof handleStatus>>,
+) {
+  return {
+    qdrant: result.qdrant,
+    embedding: result.embedding,
+    collection: null,
+    session: {
+      uptime_seconds: 0,
+      started_at: "redacted",
+    },
+    pending_count: result.pending_count,
+    ...(result.hybrid_search ? { hybrid_search: result.hybrid_search } : {}),
+  };
+}
+
 // =========================================================================
 // Route Registration
 // =========================================================================
@@ -217,7 +257,7 @@ function createApp(container: AppContainer): Hono<Env> {
     const transport = new WebStandardStreamableHTTPServerTransport({});
     const mcpServer = new McpServer({
       name: "easy-memory",
-      version: "0.5.5",
+      version: "0.5.6",
     });
     registerTools(mcpServer, container, {
       auditContext: {
@@ -226,6 +266,9 @@ function createApp(container: AppContainer): Hono<Env> {
         userAgent: c.req.header("User-Agent") ?? "",
         httpMethod: c.req.method,
         httpPath: "/mcp",
+        ...(validation.user_id != null
+          ? { callerUserId: validation.user_id }
+          : {}),
       },
     });
     await mcpServer.connect(transport);
@@ -241,6 +284,7 @@ function createApp(container: AppContainer): Hono<Env> {
     apiKeyManager: container.apiKeyManager,
     banManager: container.banManager,
     runtimeConfig: container.runtimeConfig,
+    memoryOwnership: container.memoryOwnership,
   });
   // analytics/audit 路由允许拥有对应权限的普通用户访问 (v0.7.0)
   const analyticsAuth = adminOrUserAuth(
@@ -408,7 +452,7 @@ function createApp(container: AppContainer): Hono<Env> {
         | import("../types/admin-schema.js").ApiKeyRecord
         | undefined;
       const keyPrefix = keyRecord
-        ? keyRecord.key_hash.slice(0, 8)
+        ? (keyRecord.prefix ?? keyRecord.key_hash.slice(0, 8))
         : c.get("authMode") === "master"
           ? "master"
           : "";
@@ -454,7 +498,7 @@ function createApp(container: AppContainer): Hono<Env> {
     return c.json({
       serverInfo: {
         name: "easy-memory",
-        version: "0.5.5",
+        version: "0.5.6",
       },
       authentication: {
         required: true,
@@ -717,7 +761,12 @@ function createApp(container: AppContainer): Hono<Env> {
     const apiKeyRecord = c.get("apiKeyRecord");
     const saveDeps = {
       ...deps,
-      callerKeyPrefix: apiKeyRecord?.prefix ?? "",
+      callerKeyPrefix:
+        apiKeyRecord?.prefix ??
+        (c.get("authMode") === "master" ? "master" : ""),
+      ...(apiKeyRecord?.user_id != null
+        ? { callerUserId: apiKeyRecord.user_id }
+        : {}),
     };
     const result = await handleSave(parsed.data, saveDeps);
     return c.json(result);
@@ -737,7 +786,16 @@ function createApp(container: AppContainer): Hono<Env> {
     const apiKeyRecord = c.get("apiKeyRecord");
     const searchDeps = {
       ...deps,
-      callerKeyPrefix: apiKeyRecord?.prefix ?? "",
+      ...(apiKeyRecord?.user_id != null
+        ? {
+            callerKeyPrefix: apiKeyRecord.prefix,
+            callerUserId: apiKeyRecord.user_id,
+            callerOwnedKeyPrefixes:
+              container.apiKeyManager.getKeyPrefixesByUserId(
+                apiKeyRecord.user_id,
+              ),
+          }
+        : {}),
     };
     const result = await handleSearch(parsed.data, searchDeps);
     return c.json(result);
@@ -753,12 +811,38 @@ function createApp(container: AppContainer): Hono<Env> {
         400,
       );
     }
-    const result = await handleForget(parsed.data, deps);
+    const apiKeyRecord = c.get("apiKeyRecord");
+    const forgetDeps = {
+      ...deps,
+      ...(apiKeyRecord?.user_id != null
+        ? {
+            callerKeyPrefix: apiKeyRecord.prefix,
+            callerUserId: apiKeyRecord.user_id,
+            callerOwnedKeyPrefixes:
+              container.apiKeyManager.getKeyPrefixesByUserId(
+                apiKeyRecord.user_id,
+              ),
+          }
+        : {}),
+    };
+    const result = await handleForget(parsed.data, forgetDeps);
     return c.json(result);
   });
 
   // ===== GET /api/status =====
   app.get("/api/status", async (c) => {
+    const authMode = c.get("authMode");
+    const apiKeyRecord = c.get("apiKeyRecord");
+
+    if (authMode === "api_key") {
+      if (!hasApiKeyScope(apiKeyRecord, "status:read")) {
+        return c.json({ error: "Insufficient permissions" }, 403);
+      }
+
+      const result = await handleStatus({}, deps);
+      return c.json(redactStatusForManagedKey(result));
+    }
+
     const project = c.req.query("project");
     const result = await handleStatus(project ? { project } : {}, deps);
     return c.json(result);

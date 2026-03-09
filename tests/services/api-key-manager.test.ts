@@ -3,7 +3,7 @@
  * @description ApiKeyManager 单元测试 — CRUD + 缓存 + 审计。
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ApiKeyManager } from "../../src/services/api-key-manager.js";
 import { unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -48,9 +48,29 @@ describe("ApiKeyManager", () => {
       expect(result.key).toBeDefined();
       expect(result.key.startsWith("em_")).toBe(true);
       expect(result.name).toBe("test-key");
-      expect(result.prefix).toBe(result.key.slice(0, 8));
+      expect(result.prefix).toBe(result.key.slice(0, result.prefix.length));
+      expect(result.prefix.length).toBeGreaterThan(8);
       expect(result.is_active).toBe(true);
       expect(result.created_by).toBe("admin");
+    });
+
+    it("regenerates when a generated prefix collides", () => {
+      const collidingKey = `em_${"a".repeat(64)}`;
+      const uniqueKey = `em_${"b".repeat(64)}`;
+      const generateKeySpy = vi.spyOn(manager as never, "generateKey" as never);
+
+      generateKeySpy
+        .mockReturnValueOnce(collidingKey)
+        .mockReturnValueOnce(collidingKey)
+        .mockReturnValueOnce(uniqueKey);
+
+      const first = manager.createKey({ name: "first" }, "admin");
+      const second = manager.createKey({ name: "second" }, "admin");
+
+      expect(first.prefix).not.toBe(second.prefix);
+      expect(second.prefix).toBe(uniqueKey.slice(0, second.prefix.length));
+
+      generateKeySpy.mockRestore();
     });
 
     it("stores key hash, not plaintext", () => {
@@ -369,6 +389,45 @@ describe("ApiKeyManager", () => {
 
       expect(manager.listKeysByUser(1001).length).toBe(0);
       expect(manager.countActiveKeysByUser(1001)).toBe(0);
+    });
+
+    it("historical user prefixes survive revoke, soft delete, and semi delete", () => {
+      const original = manager.createKeyForUser(
+        { name: "rotate-me" },
+        1001,
+        "u1",
+      );
+      const rotated = manager.rotateKey(original.id, "admin")!;
+
+      const softDeleted = manager.createKeyForUser(
+        { name: "soft-delete-me" },
+        1001,
+        "u1",
+      );
+      expect(manager.revokeKeyForUser(softDeleted.id, 1001)).toBe(true);
+
+      const semiDeleted = manager.createKeyForUser(
+        { name: "semi-delete-me" },
+        1001,
+        "u1",
+      );
+      manager.revokeKey(semiDeleted.id);
+      manager.revokeKey(semiDeleted.id);
+
+      expect(manager.getKeyPrefixesByUserId(1001)).toEqual(
+        expect.arrayContaining([
+          original.prefix,
+          rotated.prefix,
+          softDeleted.prefix,
+          semiDeleted.prefix,
+        ]),
+      );
+      expect(manager.getUserIdByPrefix(original.prefix)).toBe(1001);
+      expect(manager.getUserIdByPrefix(rotated.prefix)).toBe(1001);
+      expect(manager.getUserIdByPrefix(softDeleted.prefix)).toBe(1001);
+      expect(manager.getUserIdByPrefix(semiDeleted.prefix)).toBe(1001);
+      expect(manager.hasRecordedPrefix(original.prefix)).toBe(true);
+      expect(manager.hasRecordedPrefix(rotated.prefix)).toBe(true);
     });
   });
 

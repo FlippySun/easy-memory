@@ -13,7 +13,11 @@ import type { ApiKeyManager } from "../services/api-key-manager.js";
 import type { AuthService } from "../services/auth.js";
 import { adminOrUserAuth } from "./admin-auth.js";
 import { createUserScopeMiddleware } from "./middlewares.js";
-import { MEMORY_SCOPE_ENUM, MEMORY_TYPE_ENUM } from "../types/schema.js";
+import {
+  MEMORY_SCOPE_ENUM,
+  MEMORY_TYPE_ENUM,
+  collectionName,
+} from "../types/schema.js";
 import { log } from "../utils/logger.js";
 
 // =========================================================================
@@ -40,6 +44,8 @@ const PatchMemorySchema = z.object({
   memory_type: z.enum(MEMORY_TYPE_ENUM).optional(),
 });
 
+type BrowseQuery = z.infer<typeof BrowseQuerySchema>;
+
 // =========================================================================
 // Types
 // =========================================================================
@@ -49,6 +55,87 @@ export interface MemoryRouteDeps {
   apiKeyManager: ApiKeyManager;
   authService: AuthService;
   adminToken: string;
+}
+
+function isAdminRequest(c: Context): boolean {
+  return (c.get("authUserRole" as never) as string | undefined) === "admin";
+}
+
+function getScopedUserKeyPrefixes(c: Context): string[] {
+  return (c.get("userKeyPrefixes" as never) as string[] | undefined) ?? [];
+}
+
+function getScopedUserId(c: Context): number | undefined {
+  return c.get("authUserId" as never) as number | undefined;
+}
+
+function buildOwnerFilter(
+  userId: number | undefined,
+  userKeyPrefixes: string[],
+): Record<string, unknown> {
+  const should: Array<Record<string, unknown>> = [];
+
+  if (userId != null) {
+    should.push({
+      key: "owner_user_id",
+      match: { value: userId },
+    });
+  }
+
+  if (userKeyPrefixes.length > 0) {
+    should.push({
+      key: "owner_key_prefix",
+      match: { any: userKeyPrefixes },
+    });
+  }
+
+  return should.length === 1 ? should[0]! : { should };
+}
+
+function appendBrowseFilters(
+  mustConditions: Array<Record<string, unknown>>,
+  query: BrowseQuery,
+  options: { defaultLifecycle?: boolean } = {},
+): void {
+  const lifecycle =
+    query.lifecycle ?? (options.defaultLifecycle ? "active" : undefined);
+  if (lifecycle) {
+    mustConditions.push({
+      key: "lifecycle",
+      match: { value: lifecycle },
+    });
+  }
+
+  if (query.memory_scope) {
+    mustConditions.push({
+      key: "memory_scope",
+      match: { value: query.memory_scope },
+    });
+  }
+  if (query.memory_type) {
+    mustConditions.push({
+      key: "memory_type",
+      match: { value: query.memory_type },
+    });
+  }
+  if (query.device_id) {
+    mustConditions.push({
+      key: "device_id",
+      match: { value: query.device_id },
+    });
+  }
+  if (query.git_branch) {
+    mustConditions.push({
+      key: "git_branch",
+      match: { value: query.git_branch },
+    });
+  }
+  if (query.tag) {
+    mustConditions.push({
+      key: "tags",
+      match: { value: query.tag },
+    });
+  }
 }
 
 // =========================================================================
@@ -87,53 +174,17 @@ export function createMemoryRoutes(deps: MemoryRouteDeps): Hono {
     // 构建 Qdrant filter
     const mustConditions: Array<Record<string, unknown>> = [];
 
-    // 用户数据隔离: 非 admin 用户只能看到自己 key 创建的记忆
-    const userKeyPrefixes = c.get("userKeyPrefixes" as never) as
-      | string[]
-      | undefined;
-    if (userKeyPrefixes && userKeyPrefixes.length > 0) {
-      mustConditions.push({
-        key: "owner_key_prefix",
-        match: { any: userKeyPrefixes },
-      });
+    // 用户数据隔离: 非 admin 用户只能看到自己拥有的记忆
+    if (!isAdminRequest(c)) {
+      const userId = getScopedUserId(c);
+      const userKeyPrefixes = getScopedUserKeyPrefixes(c);
+      if (userId == null && userKeyPrefixes.length === 0) {
+        return c.json({ ok: true, project, memories: [], next_offset: null });
+      }
+      mustConditions.push(buildOwnerFilter(userId, userKeyPrefixes));
     }
 
-    // lifecycle 默认只看 active
-    mustConditions.push({
-      key: "lifecycle",
-      match: { value: query.lifecycle ?? "active" },
-    });
-
-    if (query.memory_scope) {
-      mustConditions.push({
-        key: "memory_scope",
-        match: { value: query.memory_scope },
-      });
-    }
-    if (query.memory_type) {
-      mustConditions.push({
-        key: "memory_type",
-        match: { value: query.memory_type },
-      });
-    }
-    if (query.device_id) {
-      mustConditions.push({
-        key: "device_id",
-        match: { value: query.device_id },
-      });
-    }
-    if (query.git_branch) {
-      mustConditions.push({
-        key: "git_branch",
-        match: { value: query.git_branch },
-      });
-    }
-    if (query.tag) {
-      mustConditions.push({
-        key: "tags",
-        match: { value: query.tag },
-      });
-    }
+    appendBrowseFilters(mustConditions, query, { defaultLifecycle: true });
 
     const filter =
       mustConditions.length > 0 ? { must: mustConditions } : undefined;
@@ -179,6 +230,9 @@ export function createMemoryRoutes(deps: MemoryRouteDeps): Hono {
           ...(p.payload.owner_key_prefix
             ? { owner_key_prefix: String(p.payload.owner_key_prefix) }
             : {}),
+          ...(p.payload.owner_user_id != null
+            ? { owner_user_id: Number(p.payload.owner_user_id) }
+            : {}),
           ...(p.payload.source_file
             ? { source_file: String(p.payload.source_file) }
             : {}),
@@ -199,16 +253,80 @@ export function createMemoryRoutes(deps: MemoryRouteDeps): Hono {
   // ----- GET /stats — 所有 collection 统计 -----
   app.get("/stats", async (c: Context) => {
     try {
-      const collections = await qdrant.listAllCollections();
-      const totalMemories = collections.reduce(
-        (sum, col) => sum + col.points_count,
-        0,
-      );
+      const raw = Object.fromEntries(new URL(c.req.url).searchParams.entries());
+      const parsed = BrowseQuerySchema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json(
+          { error: "Invalid query parameters", details: parsed.error.issues },
+          400,
+        );
+      }
+
+      const query = parsed.data;
+      const mustConditions: Array<Record<string, unknown>> = [];
+
+      if (!isAdminRequest(c)) {
+        const userId = getScopedUserId(c);
+        const userKeyPrefixes = getScopedUserKeyPrefixes(c);
+        if (userId == null && userKeyPrefixes.length === 0) {
+          return c.json({
+            ok: true,
+            total_memories: 0,
+            total_projects: 0,
+            collections: [],
+          });
+        }
+
+        mustConditions.push(buildOwnerFilter(userId, userKeyPrefixes));
+      }
+
+      appendBrowseFilters(mustConditions, query);
+
+      if (!query.project && mustConditions.length === 0) {
+        const collections = await qdrant.listAllCollections();
+        const totalMemories = collections.reduce(
+          (sum, col) => sum + col.points_count,
+          0,
+        );
+        return c.json({
+          ok: true,
+          total_memories: totalMemories,
+          total_projects: collections.length,
+          collections,
+        });
+      }
+
+      const filter =
+        mustConditions.length > 0 ? { must: mustConditions } : undefined;
+      const targetCollections = query.project
+        ? [{ name: collectionName(query.project), project: query.project }]
+        : (await qdrant.listAllCollections()).map((col) => ({
+            name: col.name,
+            project: col.project,
+          }));
+
+      const scopedCollections = (
+        await Promise.all(
+          targetCollections.map(async (col) => ({
+            name: col.name,
+            project: col.project,
+            points_count: await qdrant.countPoints(col.project, {
+              ...(filter ? { filter } : {}),
+            }),
+          })),
+        )
+      )
+        .filter((col) => col.points_count > 0)
+        .sort((a, b) => b.points_count - a.points_count);
+
       return c.json({
         ok: true,
-        total_memories: totalMemories,
-        total_projects: collections.length,
-        collections,
+        total_memories: scopedCollections.reduce(
+          (sum, col) => sum + col.points_count,
+          0,
+        ),
+        total_projects: scopedCollections.length,
+        collections: scopedCollections,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -253,18 +371,32 @@ export function createMemoryRoutes(deps: MemoryRouteDeps): Hono {
     };
 
     try {
-      // 用户数据隔离: 非 admin 用户只能修改自己 key 创建的记忆
-      const userKeyPrefixes = c.get("userKeyPrefixes" as never) as
-        | string[]
-        | undefined;
-      if (userKeyPrefixes) {
+      // 用户数据隔离: 非 admin 用户只能修改自己拥有的记忆
+      if (!isAdminRequest(c)) {
+        const userId = getScopedUserId(c);
+        const userKeyPrefixes = getScopedUserKeyPrefixes(c);
+        if (userId == null && userKeyPrefixes.length === 0) {
+          return c.json({ error: "Insufficient permissions" }, 403);
+        }
         // 读取目标点的 payload 做所有权验证
         const payload = await qdrant.getPointPayload(project, pointId);
         if (!payload) {
           return c.json({ error: "Memory not found" }, 404);
         }
         const ownerPrefix = String(payload.owner_key_prefix ?? "");
-        if (!userKeyPrefixes.includes(ownerPrefix)) {
+        const ownerUserId =
+          typeof payload.owner_user_id === "number"
+            ? payload.owner_user_id
+            : typeof payload.owner_user_id === "string"
+              ? Number(payload.owner_user_id)
+              : null;
+        const ownedByUserId =
+          userId != null &&
+          Number.isInteger(ownerUserId) &&
+          ownerUserId === userId;
+        const ownedByKeyPrefix =
+          ownerPrefix.length > 0 && userKeyPrefixes.includes(ownerPrefix);
+        if (!ownedByUserId && !ownedByKeyPrefix) {
           return c.json({ error: "Insufficient permissions" }, 403);
         }
       }

@@ -152,6 +152,19 @@ describe("handleSave", () => {
     expect(payload.embedding_model).toBe("bge-m3");
   });
 
+  it("should store stable owner_user_id when caller user context is provided", async () => {
+    deps.callerKeyPrefix = "em_user_owner_123";
+    deps.callerUserId = 42;
+
+    await handleSave({ content: "owned memory" }, deps);
+
+    const upsertCall = (deps.qdrant.upsert as ReturnType<typeof vi.fn>).mock
+      .calls[0]!;
+    const payload = upsertCall[1][0].payload;
+    expect(payload.owner_key_prefix).toBe("em_user_owner_123");
+    expect(payload.owner_user_id).toBe(42);
+  });
+
   it("should reject invalid input (empty content) with structured response", async () => {
     const result = await handleSave({ content: "" }, deps);
     expect(result.status).toBe("rejected_low_quality");

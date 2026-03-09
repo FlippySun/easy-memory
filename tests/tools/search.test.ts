@@ -123,6 +123,38 @@ describe("handleSearch", () => {
     expect(opts.filter.must).toBeDefined();
   });
 
+  it("should add owner scope filter for user-owned requests", async () => {
+    deps.callerUserId = 7;
+    deps.callerOwnedKeyPrefixes = ["em_old_prefix", "em_rotated_prefix"];
+    deps.callerKeyPrefix = "em_current_prefix";
+
+    await handleSearch({ query: "owned query" }, deps);
+
+    const searchCall = (deps.qdrant.hybridSearch as ReturnType<typeof vi.fn>)
+      .mock.calls[0]!;
+    const opts = searchCall[3];
+    const ownerFilter = opts.filter.must.find(
+      (condition: any) =>
+        Array.isArray(condition.should) &&
+        condition.should.some((item: any) => item.key === "owner_user_id"),
+    );
+
+    expect(ownerFilter).toEqual({
+      should: [
+        {
+          key: "owner_user_id",
+          match: { value: 7 },
+        },
+        {
+          key: "owner_key_prefix",
+          match: {
+            any: ["em_old_prefix", "em_rotated_prefix", "em_current_prefix"],
+          },
+        },
+      ],
+    });
+  });
+
   it("should use custom project", async () => {
     await handleSearch({ query: "test", project: "my-proj" }, deps);
 

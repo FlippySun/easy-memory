@@ -40,6 +40,52 @@ function writeAuditLog(entry: Record<string, unknown>): void {
 export interface ForgetHandlerDeps {
   qdrant: QdrantService;
   defaultProject: string;
+  callerKeyPrefix?: string;
+  callerUserId?: number;
+  callerOwnedKeyPrefixes?: string[];
+}
+
+function getScopedPrefixes(deps: ForgetHandlerDeps): string[] {
+  if (deps.callerUserId == null) {
+    return [];
+  }
+
+  const prefixes = new Set(
+    (deps.callerOwnedKeyPrefixes ?? []).filter(
+      (prefix): prefix is string =>
+        typeof prefix === "string" && prefix.length > 0,
+    ),
+  );
+  if (deps.callerKeyPrefix) {
+    prefixes.add(deps.callerKeyPrefix);
+  }
+  return [...prefixes];
+}
+
+function isOwnedByCaller(
+  payload: Record<string, unknown>,
+  deps: ForgetHandlerDeps,
+): boolean {
+  if (deps.callerUserId == null) {
+    return true;
+  }
+
+  const ownerUserId =
+    typeof payload.owner_user_id === "number"
+      ? payload.owner_user_id
+      : typeof payload.owner_user_id === "string" &&
+          /^\d+$/.test(payload.owner_user_id)
+        ? Number(payload.owner_user_id)
+        : null;
+
+  if (ownerUserId != null && ownerUserId === deps.callerUserId) {
+    return true;
+  }
+
+  const ownerPrefix = String(payload.owner_key_prefix ?? "");
+  return (
+    ownerPrefix.length > 0 && getScopedPrefixes(deps).includes(ownerPrefix)
+  );
 }
 
 /**
@@ -77,6 +123,18 @@ export async function handleForget(
     );
     if (!existingPayload) {
       log.warn("Forget target not found", { id: input.id, project });
+      return {
+        status: "not_found",
+        message: `Memory ${input.id} not found in project "${project}".`,
+      };
+    }
+
+    if (!isOwnedByCaller(existingPayload, deps)) {
+      log.warn("Forget target outside caller scope", {
+        id: input.id,
+        project,
+        callerUserId: deps.callerUserId ?? null,
+      });
       return {
         status: "not_found",
         message: `Memory ${input.id} not found in project "${project}".`,
