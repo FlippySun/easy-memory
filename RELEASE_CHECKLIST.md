@@ -16,7 +16,7 @@
 | --- | -------------------------------------------------- | ---- | ----------------------------------------------------- |
 | 1   | [npm 发布](#1-npm-发布)                            | ✅   | `easy-memory@0.5.6` 已发布到 npmjs.org               |
 | 2   | [Docker 化](#2-docker-化)                          | ✅   | 多平台镜像 (amd64+arm64) `0.5.6` 已推送 Docker Hub   |
-| 3   | [CI/CD](#3-cicd-github-actions)                    | 🔧   | 等待 `v0.5.6` tag 推送并验证 workflow                 |
+| 3   | [CI/CD](#3-cicd-github-actions)                    | 🔧   | CI / Docker workflow 成功；npm workflow metadata 修复已补到 main |
 | 4   | [VPS 部署](#4-vps-部署)                            | ✅   | `memory.zhiz.chat` 已切换到 `0.5.6`                   |
 | 5   | [README 完善](#5-readme-完善)                      | ✅   | 完整重写，含 API 文档、环境变量参考                   |
 | 6   | [E2E 真实环境测试](#6-e2e-真实环境测试)            | ✅   | 916 单测 + typecheck + build:all + VPS smoke 通过     |
@@ -531,7 +531,7 @@ Transport: Streamable HTTP (remote) / stdio (local npm)
   ↓
 2. Docker 化 ✅ → thj8632/easy-memory:0.5.6 (amd64+arm64)
   ↓
-3. CI/CD 🔧 → 等待 v0.5.6 tag / GitHub Release 同步
+3. CI/CD 🔧 → CI / Docker workflow 成功；npm workflow metadata 修复已补到 main
   ↓
 4. VPS 部署 ✅ → 已将 0.5.6 同步到 memory.zhiz.chat
   ↓
