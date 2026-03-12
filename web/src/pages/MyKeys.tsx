@@ -4,10 +4,14 @@ import {
   type UserKeyRecord,
   type UserKeyCreateResponse,
 } from "../api/client";
-import { Button, Input, CopyableText } from "../components/ui";
+import { useI18n } from "../contexts/i18n";
+import { Button, Input, CopyableText, useConfirmDialog } from "../components/ui";
 import { Key, Plus, Trash2, Copy, Check, AlertCircle } from "lucide-react";
 
 export default function MyKeys() {
+  const { t, formatDate, formatNumber } = useI18n();
+  const { confirm: confirmAction, dialog: confirmDialog } =
+    useConfirmDialog();
   const [keys, setKeys] = useState<UserKeyRecord[]>([]);
   const [maxKeys, setMaxKeys] = useState(2);
   const [loading, setLoading] = useState(true);
@@ -34,14 +38,14 @@ export default function MyKeys() {
     } catch (err) {
       if (!options?.silent) {
         setError(
-          err instanceof Error ? err.message : "Failed to load API keys",
+          err instanceof Error ? err.message : t("myKeys.loadFailed"),
         );
       }
       throw err;
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     loadKeys().catch(() => undefined);
@@ -65,14 +69,12 @@ export default function MyKeys() {
       }
 
       if (!refreshOk) {
-        setError("Key created, but failed to refresh key list.");
+        setError(t("myKeys.createRefreshFailed"));
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to create key";
+      const msg = err instanceof Error ? err.message : t("myKeys.createFailed");
       if (msg.includes("max:") || msg.includes("409")) {
-        setError(
-          `You already have ${maxKeys} active API keys (maximum allowed).`,
-        );
+        setError(t("myKeys.maxKeysError", { max: maxKeys }));
       } else {
         setError(msg);
       }
@@ -83,11 +85,12 @@ export default function MyKeys() {
 
   const handleRevoke = async (id: string) => {
     if (actionLoading !== null) return;
-    if (
-      !confirm(
-        "Delete this API key from your list? You won't be able to recover it from My API Keys.",
-      )
-    ) {
+    const confirmed = await confirmAction({
+      title: t("myKeys.confirmDeleteTitle"),
+      description: t("myKeys.confirmDeleteDescription"),
+      variant: "danger",
+    });
+    if (!confirmed) {
       return;
     }
     setActionLoading(id);
@@ -107,10 +110,10 @@ export default function MyKeys() {
       }
 
       if (!refreshOk) {
-        setError("Key deleted from your list, but refresh failed.");
+        setError(t("myKeys.deleteRefreshFailed"));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete key");
+      setError(err instanceof Error ? err.message : t("myKeys.deleteFailed"));
     } finally {
       setActionLoading(null);
     }
@@ -134,7 +137,7 @@ export default function MyKeys() {
           args: ["-y", "easy-memory@latest"],
           env: {
             EASY_MEMORY_TOKEN: apiKey,
-            EASY_MEMORY_URL: window.location.origin,
+            EASY_MEMORY_URL: globalThis.location.origin,
           },
         },
       },
@@ -154,17 +157,21 @@ export default function MyKeys() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">My API Keys</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {t("myKeys.title")}
+          </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Manage your API keys for MCP client connections ({activeKeys.length}
-            /{maxKeys})
+            {t("myKeys.description", {
+              current: activeKeys.length,
+              max: maxKeys,
+            })}
           </p>
         </div>
 
         {activeKeys.length < maxKeys && (
           <Button onClick={() => setShowCreate(true)} className="gap-2">
             <Plus className="w-4 h-4" />
-            Create Key
+            {t("common.actions.createKey")}
           </Button>
         )}
       </div>
@@ -179,13 +186,15 @@ export default function MyKeys() {
       {/* Create Key Form */}
       {showCreate && (
         <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <h2 className="text-lg font-semibold mb-4">Create New API Key</h2>
+          <h2 className="text-lg font-semibold mb-4">
+            {t("myKeys.createSectionTitle")}
+          </h2>
           <div className="flex gap-3">
             <Input
               type="text"
               value={newKeyName}
               onChange={(e) => setNewKeyName(e.target.value)}
-              placeholder="Key name (e.g. Cursor, VS Code)"
+              placeholder={t("myKeys.keyNamePlaceholder")}
               className="flex-1"
               maxLength={128}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
@@ -194,7 +203,7 @@ export default function MyKeys() {
               onClick={handleCreate}
               disabled={creating || !newKeyName.trim()}
             >
-              {creating ? "Creating..." : "Create"}
+              {creating ? t("myKeys.creating") : t("myKeys.create")}
             </Button>
             <Button
               variant="secondary"
@@ -203,7 +212,7 @@ export default function MyKeys() {
                 setNewKeyName("");
               }}
             >
-              Cancel
+              {t("common.actions.cancel")}
             </Button>
           </div>
         </div>
@@ -216,10 +225,10 @@ export default function MyKeys() {
             <Check className="w-5 h-5 text-green-600 mt-0.5" />
             <div>
               <h3 className="font-semibold text-green-900">
-                API Key Created Successfully
+                {t("myKeys.createdSuccessTitle")}
               </h3>
               <p className="text-sm text-green-700 mt-1">
-                Copy your API key now — it won't be shown again!
+                {t("myKeys.createdSuccessDescription")}
               </p>
             </div>
           </div>
@@ -232,7 +241,7 @@ export default function MyKeys() {
               <button
                 onClick={() => copyToClipboard(createdKey.key, "key")}
                 className="ml-2 p-1.5 rounded hover:bg-slate-100 shrink-0"
-                title="Copy API Key"
+                title={t("myKeys.copyApiKeyTitle")}
               >
                 {copied === "key" ? (
                   <Check className="w-4 h-4 text-green-600" />
@@ -245,11 +254,10 @@ export default function MyKeys() {
 
           <div>
             <h4 className="text-sm font-semibold text-green-900 mb-2">
-              MCP Client Configuration
+              {t("myKeys.mcpConfigTitle")}
             </h4>
             <p className="text-xs text-green-700 mb-2">
-              Add this to your MCP client config (e.g. Claude Desktop, Cursor,
-              VS Code):
+              {t("myKeys.mcpConfigDescription")}
             </p>
             <div className="bg-slate-900 rounded-lg p-4 relative">
               <pre className="text-sm text-green-400 font-mono overflow-x-auto whitespace-pre">
@@ -260,7 +268,7 @@ export default function MyKeys() {
                   copyToClipboard(getMcpConfig(createdKey.key), "mcp")
                 }
                 className="absolute top-2 right-2 p-1.5 rounded bg-slate-700 hover:bg-slate-600"
-                title="Copy MCP Config"
+                title={t("myKeys.copyMcpConfigTitle")}
               >
                 {copied === "mcp" ? (
                   <Check className="w-4 h-4 text-green-400" />
@@ -275,7 +283,7 @@ export default function MyKeys() {
             onClick={() => setCreatedKey(null)}
             className="text-sm text-green-700 hover:text-green-800 underline"
           >
-            I've saved my key, dismiss this
+            {t("myKeys.dismissSavedKey")}
           </button>
         </div>
       )}
@@ -286,10 +294,10 @@ export default function MyKeys() {
           <div className="p-12 text-center">
             <Key className="w-12 h-12 text-slate-300 mx-auto mb-3" />
             <h3 className="text-lg font-medium text-slate-700">
-              No API Keys Yet
+              {t("myKeys.noKeysTitle")}
             </h3>
             <p className="text-sm text-slate-500 mt-1">
-              Create an API key to connect your MCP clients.
+              {t("myKeys.noKeysDescription")}
             </p>
           </div>
         ) : (
@@ -297,22 +305,22 @@ export default function MyKeys() {
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">
-                  Name
+                  {t("myKeys.name")}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">
-                  Prefix
+                  {t("myKeys.prefix")}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">
-                  Created
+                  {t("myKeys.created")}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">
-                  Status
+                  {t("myKeys.status")}
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">
-                  Requests
+                  {t("myKeys.requests")}
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">
-                  Actions
+                  {t("myKeys.actions")}
                 </th>
               </tr>
             </thead>
@@ -329,21 +337,21 @@ export default function MyKeys() {
                     />
                   </td>
                   <td className="px-6 py-4 text-sm text-slate-500">
-                    {new Date(key.created_at).toLocaleDateString()}
+                    {formatDate(key.created_at)}
                   </td>
                   <td className="px-6 py-4">
                     {key.is_active ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        Active
+                        {t("common.status.active")}
                       </span>
                     ) : (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                        Revoked
+                        {t("common.status.revoked")}
                       </span>
                     )}
                   </td>
                   <td className="px-6 py-4 text-sm text-slate-500">
-                    {key.total_requests.toLocaleString()}
+                    {formatNumber(key.total_requests)}
                   </td>
                   <td className="px-6 py-4 text-right">
                     {key.is_active && (
@@ -351,7 +359,7 @@ export default function MyKeys() {
                         onClick={() => handleRevoke(key.id)}
                         disabled={actionLoading === key.id}
                         className="text-red-500 hover:text-red-700 p-1.5 rounded-md hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Revoke key"
+                        title={t("myKeys.revokeTooltip")}
                       >
                         {actionLoading === key.id ? (
                           <svg
@@ -385,6 +393,8 @@ export default function MyKeys() {
           </table>
         )}
       </div>
+
+      {confirmDialog}
     </div>
   );
 }

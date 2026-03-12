@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./contexts/auth";
+import { useI18n } from "./contexts/i18n";
 import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/Login";
 import { DashboardPage } from "./pages/Dashboard";
@@ -13,7 +14,9 @@ import { SettingsPage } from "./pages/Settings";
 import RegisterPage from "./pages/Register";
 import MyKeysPage from "./pages/MyKeys";
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedRoute({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
@@ -34,20 +37,21 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function PermissionGuard({
   permission,
   children,
-}: {
+}: Readonly<{
   permission: string;
   children: React.ReactNode;
-}) {
+}>) {
   const { hasPermission } = useAuth();
+  const { t } = useI18n();
 
   if (!hasPermission(permission)) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
         <h2 className="text-lg font-semibold text-slate-900 mb-2">
-          Access Denied
+          {t("app.accessDeniedTitle")}
         </h2>
         <p className="text-sm text-slate-500">
-          You don't have permission to access this page.
+          {t("app.accessDeniedDescription")}
         </p>
       </div>
     );
@@ -58,13 +62,14 @@ function PermissionGuard({
 
 export function App() {
   const { isAuthenticated, isLoading } = useAuth();
+  const { t } = useI18n();
 
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface">
         <div className="flex flex-col items-center gap-3">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary-600 border-t-transparent" />
-          <p className="text-sm text-slate-500">Loading...</p>
+          <p className="text-sm text-slate-500">{t("common.loading")}</p>
         </div>
       </div>
     );

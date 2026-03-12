@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-03-12
+
+### Added
+
+- **[Web] i18n 国际化支持**: Web Admin 管理面板新增 `i18next` + `react-i18next` 多语言框架，支持中英文切换，所有页面（Dashboard、MemoryBrowser、Analytics、AuditLogs、ApiKeys、MyKeys、Bans、Users、Settings、Login、Register）完成国际化适配。
+- **[Web] LanguageSwitcher 组件**: 新增语言切换器组件与 `i18n` Context，用户可在管理面板内自由切换界面语言。
+- **[DX] `verify:local` 脚本**: 新增 `pnpm verify:local` 快捷命令（`typecheck + test`），便于本地提交前快速校验。
+
+### Changed
+
+- **[Web] 全页面 UI 重构**: Layout、Analytics、MemoryBrowser、ApiKeys、AuditLogs、Bans、Dashboard、Login、Register、Settings、Users、MyKeys 等组件进行大规模 UI/UX 优化与代码重构，提升响应式布局与用户体验。
+- **[Web] ui.tsx 组件库增强**: 基础 UI 组件库扩充，新增更多可复用组件与样式变体。
+
+### Tests
+
+- **发布前验证**: 916 单测全绿，`pnpm typecheck` 通过，`pnpm build` + `pnpm build:web` 构建成功。
+
 ## [0.5.6] - 2026-03-09
 
 ### Added

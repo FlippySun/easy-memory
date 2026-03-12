@@ -11,10 +11,22 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useAuth } from "../contexts/auth";
+import { useI18n } from "../contexts/i18n";
+
+// ========================== 变更记录 ==========================
+// [日期]     2026-03-12
+// [类型]     修复Bug
+// [描述]     收敛 Audit Logs 页面残留的硬编码标题与空态占位值，保证审计页头部与表格回退值也跟随当前语言。
+// [思路]     复用现有翻译 key 与 `common.emptyValue`，只修正显示层，不改动审计查询与详情抽屉逻辑。
+// [影响范围] web/src/pages/AuditLogs.tsx、web/src/i18n/resources.ts
+// [潜在风险] 若后端返回新的 outcome 或 memory_scope 枚举值，动态 key 仍会回退为原 key；本次不改变该既有行为。
+// ==============================================================
 
 export function AuditLogsPage() {
   const { user } = useAuth();
+  const { t, formatDateTime, formatNumber } = useI18n();
   const isAdmin = user?.role === "admin";
+  const emptyValue = t("common.emptyValue");
   const [logs, setLogs] = useState<AdminAuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +82,7 @@ export function AuditLogsPage() {
     } catch (err) {
       if (!controller.signal.aborted) {
         setError(
-          err instanceof ApiError ? err.message : "Failed to load audit logs",
+          err instanceof ApiError ? err.message : t("audit.loadFailed"),
         );
       }
     } finally {
@@ -78,7 +90,7 @@ export function AuditLogsPage() {
         setLoading(false);
       }
     }
-  }, [page, filters]);
+  }, [filters, page, t]);
 
   useEffect(() => {
     fetchLogs();
@@ -138,14 +150,121 @@ export function AuditLogsPage() {
     }
   };
 
+  const latencyClassName = (elapsedMs: number) => {
+    if (elapsedMs > 1000) return "text-red-600";
+    if (elapsedMs > 500) return "text-amber-600";
+    return "text-emerald-600";
+  };
+
+  let tableContent: React.ReactNode;
+  if (loading) {
+    tableContent = (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary-600 border-t-transparent" />
+      </div>
+    );
+  } else if (error) {
+    tableContent = (
+      <div className="flex items-center gap-3 text-red-600 p-6">
+        <AlertCircle size={20} />
+        <p className="text-sm font-medium">{error}</p>
+      </div>
+    );
+  } else if (logs.length === 0) {
+    tableContent = (
+      <EmptyState
+        icon={<ScrollText size={32} />}
+        title={t("audit.noLogsTitle")}
+        description={t("audit.noLogsDescription")}
+      />
+    );
+  } else {
+    tableContent = (
+      <Table
+        columns={[
+          {
+            key: "timestamp",
+            title: t("audit.time"),
+            render: (r) => (
+              <span className="text-xs whitespace-nowrap">
+                {formatDateTime(r.timestamp)}
+              </span>
+            ),
+          },
+          {
+            key: "operation",
+            title: t("audit.operation"),
+            render: (r) => (
+              <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">
+                {r.operation}
+              </code>
+            ),
+          },
+          {
+            key: "outcome",
+            title: t("audit.outcome"),
+            render: (r) => (
+              <Badge variant={outcomeVariant(r.outcome)}>
+                {t(`common.outcomes.${r.outcome}`)}
+              </Badge>
+            ),
+          },
+          {
+            key: "project",
+            title: t("audit.project"),
+            render: (r) => r.project || emptyValue,
+          },
+          {
+            key: "key_prefix",
+            title: t("audit.key"),
+            render: (r) =>
+              r.key_prefix ? <code className="text-xs">{r.key_prefix}</code> : emptyValue,
+          },
+          {
+            key: "client_ip",
+            title: t("audit.clientIp"),
+            render: (r) => <span className="text-xs">{r.client_ip}</span>,
+          },
+          {
+            key: "latency_ms",
+            title: t("audit.latency"),
+            render: (r) => (
+              <span
+                className={`text-xs font-medium ${latencyClassName(r.elapsed_ms)}`}
+              >
+                {r.elapsed_ms}ms
+              </span>
+            ),
+          },
+          {
+            key: "error_message",
+            title: t("audit.error"),
+            render: (r) =>
+              r.outcome !== "success" && r.outcome_detail ? (
+                <span
+                  className="text-xs text-red-600 max-w-50 truncate block"
+                  title={r.outcome_detail}
+                >
+                  {r.outcome_detail}
+                </span>
+              ) : null,
+          },
+        ]}
+        data={logs}
+        rowKey={(r) => r.event_id}
+        onRowClick={handleRowClick}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Audit Logs</h1>
+        <h1 className="text-2xl font-bold text-slate-900">{t("audit.title")}</h1>
         <p className="text-sm text-slate-500 mt-1">
           {isAdmin
-            ? "Detailed operation audit trail"
-            : "Detailed audit trail for your own activity"}
+            ? t("audit.descriptionAdmin")
+            : t("audit.descriptionUser")}
         </p>
       </div>
 
@@ -154,7 +273,9 @@ export function AuditLogsPage() {
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-2">
             <Filter size={16} className="text-slate-400" />
-            <span className="text-sm font-medium text-slate-700">Filters:</span>
+            <span className="text-sm font-medium text-slate-700">
+              {t("audit.filters")}
+            </span>
           </div>
           <select
             value={filters.operation}
@@ -164,7 +285,7 @@ export function AuditLogsPage() {
             }}
             className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
           >
-            <option value="">All Operations</option>
+            <option value="">{t("audit.allOperations")}</option>
             <option value="memory_save">memory_save</option>
             <option value="memory_search">memory_search</option>
             <option value="memory_forget">memory_forget</option>
@@ -178,16 +299,16 @@ export function AuditLogsPage() {
             }}
             className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
           >
-            <option value="">All Outcomes</option>
-            <option value="success">Success</option>
-            <option value="error">Error</option>
-            <option value="rejected">Rejected</option>
-            <option value="unauthorized">Unauthorized</option>
-            <option value="rate_limited">Rate Limited</option>
+            <option value="">{t("audit.allOutcomes")}</option>
+            <option value="success">{t("common.outcomes.success")}</option>
+            <option value="error">{t("common.outcomes.error")}</option>
+            <option value="rejected">{t("common.outcomes.rejected")}</option>
+            <option value="unauthorized">{t("common.outcomes.unauthorized")}</option>
+            <option value="rate_limited">{t("common.outcomes.rate_limited")}</option>
           </select>
           <input
             type="text"
-            placeholder="Device ID"
+            placeholder={t("audit.placeholders.deviceId")}
             value={filters.device_id}
             onChange={(e) => {
               setFilters((p) => ({ ...p, device_id: e.target.value }));
@@ -197,7 +318,7 @@ export function AuditLogsPage() {
           />
           <input
             type="text"
-            placeholder="Git Branch"
+            placeholder={t("audit.placeholders.gitBranch")}
             value={filters.git_branch}
             onChange={(e) => {
               setFilters((p) => ({ ...p, git_branch: e.target.value }));
@@ -213,127 +334,29 @@ export function AuditLogsPage() {
             }}
             className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
           >
-            <option value="">All Scopes</option>
-            <option value="global">global</option>
-            <option value="project">project</option>
-            <option value="branch">branch</option>
+            <option value="">{t("audit.allScopes")}</option>
+            <option value="global">{t("memoryBrowser.scopes.global")}</option>
+            <option value="project">{t("memoryBrowser.scopes.project")}</option>
+            <option value="branch">{t("memoryBrowser.scopes.branch")}</option>
           </select>
           <span className="ml-auto text-xs text-slate-500">
             {loading
-              ? "Loading records..."
-              : `${total.toLocaleString()} total records`}
+              ? t("audit.loadingRecords")
+              : t("audit.totalRecords", { count: formatNumber(total) })}
           </span>
         </div>
       </Card>
 
       {/* Logs Table */}
       <Card padding={false}>
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary-600 border-t-transparent" />
-          </div>
-        ) : error ? (
-          <div className="flex items-center gap-3 text-red-600 p-6">
-            <AlertCircle size={20} />
-            <p className="text-sm font-medium">{error}</p>
-          </div>
-        ) : logs.length === 0 ? (
-          <EmptyState
-            icon={<ScrollText size={32} />}
-            title="No Audit Logs"
-            description="No audit logs match the current filters"
-          />
-        ) : (
-          <Table
-            columns={[
-              {
-                key: "timestamp",
-                title: "Time",
-                render: (r) => (
-                  <span className="text-xs whitespace-nowrap">
-                    {new Date(r.timestamp).toLocaleString()}
-                  </span>
-                ),
-              },
-              {
-                key: "operation",
-                title: "Operation",
-                render: (r) => (
-                  <code className="text-xs bg-slate-100 px-2 py-0.5 rounded">
-                    {r.operation}
-                  </code>
-                ),
-              },
-              {
-                key: "outcome",
-                title: "Outcome",
-                render: (r) => (
-                  <Badge variant={outcomeVariant(r.outcome)}>{r.outcome}</Badge>
-                ),
-              },
-              {
-                key: "project",
-                title: "Project",
-                render: (r) => r.project || "—",
-              },
-              {
-                key: "key_prefix",
-                title: "Key",
-                render: (r) =>
-                  r.key_prefix ? (
-                    <code className="text-xs">{r.key_prefix}</code>
-                  ) : (
-                    "—"
-                  ),
-              },
-              {
-                key: "client_ip",
-                title: "Client IP",
-                render: (r) => <span className="text-xs">{r.client_ip}</span>,
-              },
-              {
-                key: "latency_ms",
-                title: "Latency",
-                render: (r) => (
-                  <span
-                    className={`text-xs font-medium ${
-                      r.elapsed_ms > 1000
-                        ? "text-red-600"
-                        : r.elapsed_ms > 500
-                          ? "text-amber-600"
-                          : "text-emerald-600"
-                    }`}
-                  >
-                    {r.elapsed_ms}ms
-                  </span>
-                ),
-              },
-              {
-                key: "error_message",
-                title: "Error",
-                render: (r) =>
-                  r.outcome !== "success" && r.outcome_detail ? (
-                    <span
-                      className="text-xs text-red-600 max-w-50 truncate block"
-                      title={r.outcome_detail}
-                    >
-                      {r.outcome_detail}
-                    </span>
-                  ) : null,
-              },
-            ]}
-            data={logs}
-            rowKey={(r) => r.event_id}
-            onRowClick={handleRowClick}
-          />
-        )}
+        {tableContent}
       </Card>
 
       {/* Pagination */}
       {!loading && totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-slate-500">
-            Page {page} of {totalPages}
+            {t("audit.pageOf", { page, total: totalPages })}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -357,16 +380,24 @@ export function AuditLogsPage() {
       {/* Detail Drawer */}
       {selectedEvent && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={closeDetail} />
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/30"
+            onClick={closeDetail}
+            aria-label={t("common.actions.close")}
+          />
           <div className="relative w-full max-w-lg bg-white shadow-xl overflow-y-auto animate-slide-in">
             <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <ExternalLink size={18} className="text-slate-400" />
-                <h2 className="font-semibold text-slate-900">Event Detail</h2>
+                <h2 className="font-semibold text-slate-900">
+                  {t("audit.eventDetail")}
+                </h2>
               </div>
               <button
                 onClick={closeDetail}
                 className="p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+                aria-label={t("common.actions.close")}
               >
                 <X size={18} />
               </button>
@@ -378,63 +409,75 @@ export function AuditLogsPage() {
             ) : (
               <div className="p-6 space-y-4">
                 <DetailRow
-                  label="Event ID"
+                  label={t("audit.detail.eventId")}
                   value={selectedEvent.event_id}
                   mono
                 />
                 <DetailRow
-                  label="Timestamp"
-                  value={new Date(selectedEvent.timestamp).toLocaleString()}
+                  label={t("audit.detail.timestamp")}
+                  value={formatDateTime(selectedEvent.timestamp)}
                 />
-                <DetailRow label="Operation" value={selectedEvent.operation} />
-                <DetailRow label="Outcome" value={selectedEvent.outcome} />
-                <DetailRow label="Project" value={selectedEvent.project} />
                 <DetailRow
-                  label="Key Prefix"
+                  label={t("audit.detail.operation")}
+                  value={selectedEvent.operation}
+                />
+                <DetailRow
+                  label={t("audit.detail.outcome")}
+                  value={t(`common.outcomes.${selectedEvent.outcome}`)}
+                />
+                <DetailRow
+                  label={t("audit.detail.project")}
+                  value={selectedEvent.project}
+                />
+                <DetailRow
+                  label={t("audit.detail.keyPrefix")}
                   value={selectedEvent.key_prefix}
                   mono
                 />
-                <DetailRow label="Client IP" value={selectedEvent.client_ip} />
                 <DetailRow
-                  label="Latency"
+                  label={t("audit.detail.clientIp")}
+                  value={selectedEvent.client_ip}
+                />
+                <DetailRow
+                  label={t("audit.detail.latency")}
                   value={`${selectedEvent.elapsed_ms}ms`}
                 />
                 <DetailRow
-                  label="HTTP"
+                  label={t("audit.detail.http")}
                   value={`${selectedEvent.http_method} ${selectedEvent.http_path}`}
                   mono
                 />
                 <DetailRow
-                  label="HTTP Status"
+                  label={t("audit.detail.httpStatus")}
                   value={String(selectedEvent.http_status)}
                 />
                 {selectedEvent.device_id && (
                   <DetailRow
-                    label="Device ID"
+                    label={t("audit.detail.deviceId")}
                     value={selectedEvent.device_id}
                   />
                 )}
                 {selectedEvent.git_branch && (
                   <DetailRow
-                    label="Git Branch"
+                    label={t("audit.detail.gitBranch")}
                     value={selectedEvent.git_branch}
                   />
                 )}
                 {selectedEvent.memory_scope && (
                   <DetailRow
-                    label="Memory Scope"
-                    value={selectedEvent.memory_scope}
+                    label={t("audit.detail.memoryScope")}
+                    value={t(`memoryBrowser.scopes.${selectedEvent.memory_scope}`)}
                   />
                 )}
                 {selectedEvent.outcome_detail && (
                   <DetailRow
-                    label="Detail"
+                    label={t("audit.detail.detail")}
                     value={selectedEvent.outcome_detail}
                   />
                 )}
                 {selectedEvent.error_code && (
                   <DetailRow
-                    label="Error Code"
+                    label={t("audit.detail.errorCode")}
                     value={selectedEvent.error_code}
                     mono
                   />
@@ -442,7 +485,7 @@ export function AuditLogsPage() {
                 {selectedEvent.error_stack && (
                   <div>
                     <p className="text-xs font-medium text-slate-500 mb-1">
-                      Error Stack
+                      {t("audit.detail.errorStack")}
                     </p>
                     <pre className="text-xs bg-red-50 text-red-800 p-3 rounded-lg overflow-x-auto whitespace-pre-wrap">
                       {selectedEvent.error_stack}
@@ -452,7 +495,7 @@ export function AuditLogsPage() {
                 {selectedEvent.content_full && (
                   <div>
                     <p className="text-xs font-medium text-slate-500 mb-1">
-                      Content
+                      {t("audit.detail.content")}
                     </p>
                     <pre className="text-xs bg-slate-50 text-slate-800 p-3 rounded-lg overflow-x-auto whitespace-pre-wrap max-h-64">
                       {selectedEvent.content_full}
@@ -462,7 +505,7 @@ export function AuditLogsPage() {
                 {selectedEvent.query_full && (
                   <div>
                     <p className="text-xs font-medium text-slate-500 mb-1">
-                      Query
+                      {t("audit.detail.query")}
                     </p>
                     <pre className="text-xs bg-slate-50 text-slate-800 p-3 rounded-lg overflow-x-auto whitespace-pre-wrap max-h-64">
                       {selectedEvent.query_full}
@@ -482,11 +525,11 @@ function DetailRow({
   label,
   value,
   mono,
-}: {
+}: Readonly<{
   label: string;
   value: string;
   mono?: boolean;
-}) {
+}>) {
   if (!value) return null;
   return (
     <div>

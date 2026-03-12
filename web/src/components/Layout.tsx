@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/auth";
+import { useI18n } from "../contexts/i18n";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import {
   LayoutDashboard,
   Key,
@@ -25,63 +27,68 @@ interface NavItem {
   permission?: string;
 }
 
-const navItems: NavItem[] = [
-  { to: "/", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
-  {
-    to: "/my-keys",
-    label: "My API Keys",
-    icon: <KeyRound size={20} />,
-    permission: "keys:self",
-  },
-  {
-    to: "/api-keys",
-    label: "API Keys",
-    icon: <Key size={20} />,
-    permission: "keys:list",
-  },
-  {
-    to: "/bans",
-    label: "Bans",
-    icon: <ShieldBan size={20} />,
-    permission: "bans:list",
-  },
-  {
-    to: "/analytics",
-    label: "Analytics",
-    icon: <BarChart3 size={20} />,
-    permission: "analytics:read",
-  },
-  {
-    to: "/audit",
-    label: "Audit Logs",
-    icon: <ScrollText size={20} />,
-    permission: "audit:read",
-  },
-  {
-    to: "/memories",
-    label: "Memories",
-    icon: <Database size={20} />,
-    permission: "memories:browse",
-  },
-  {
-    to: "/users",
-    label: "Users",
-    icon: <Users size={20} />,
-    permission: "users:list",
-  },
-  {
-    to: "/settings",
-    label: "Settings",
-    icon: <Settings size={20} />,
-    permission: "config:read",
-  },
-];
-
 export function Layout() {
   const { user, logout, hasPermission } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const navItems: NavItem[] = [
+    {
+      to: "/",
+      label: t("layout.nav.dashboard"),
+      icon: <LayoutDashboard size={20} />,
+    },
+    {
+      to: "/my-keys",
+      label: t("layout.nav.myKeys"),
+      icon: <KeyRound size={20} />,
+      permission: "keys:self",
+    },
+    {
+      to: "/api-keys",
+      label: t("layout.nav.apiKeys"),
+      icon: <Key size={20} />,
+      permission: "keys:list",
+    },
+    {
+      to: "/bans",
+      label: t("layout.nav.bans"),
+      icon: <ShieldBan size={20} />,
+      permission: "bans:list",
+    },
+    {
+      to: "/analytics",
+      label: t("layout.nav.analytics"),
+      icon: <BarChart3 size={20} />,
+      permission: "analytics:read",
+    },
+    {
+      to: "/audit",
+      label: t("layout.nav.audit"),
+      icon: <ScrollText size={20} />,
+      permission: "audit:read",
+    },
+    {
+      to: "/memories",
+      label: t("layout.nav.memories"),
+      icon: <Database size={20} />,
+      permission: "memories:browse",
+    },
+    {
+      to: "/users",
+      label: t("layout.nav.users"),
+      icon: <Users size={20} />,
+      permission: "users:list",
+    },
+    {
+      to: "/settings",
+      label: t("layout.nav.settings"),
+      icon: <Settings size={20} />,
+      permission: "config:read",
+    },
+  ];
 
   const handleLogout = () => {
     logout();
@@ -96,9 +103,11 @@ export function Layout() {
     <div className="min-h-screen flex bg-surface">
       {/* Mobile overlay */}
       {sidebarOpen && (
-        <div
+        <button
+          type="button"
           className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
+          aria-label={t("common.actions.close")}
         />
       )}
 
@@ -117,8 +126,10 @@ export function Layout() {
             <Brain size={22} />
           </div>
           <div>
-            <h1 className="text-base font-bold text-slate-900">Easy Memory</h1>
-            <p className="text-xs text-slate-400">Admin Panel</p>
+            <h1 className="text-base font-bold text-slate-900">
+              {t("common.appName")}
+            </h1>
+            <p className="text-xs text-slate-400">{t("common.adminPanel")}</p>
           </div>
           <button
             className="p-1 ml-auto rounded-md text-slate-400 hover:text-slate-600 lg:hidden cursor-pointer"
@@ -167,7 +178,7 @@ export function Layout() {
                   {user?.username}
                 </p>
                 <p className="text-xs text-slate-400 capitalize">
-                  {user?.role}
+                  {t(`common.roles.${user?.role ?? "user"}`)}
                 </p>
               </div>
               <ChevronDown
@@ -185,7 +196,7 @@ export function Layout() {
                   className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
                 >
                   <LogOut size={16} />
-                  Logout
+                  {t("layout.logout")}
                 </button>
               </div>
             )}
@@ -203,6 +214,9 @@ export function Layout() {
           >
             <Menu size={20} />
           </button>
+          <div className="ml-auto">
+            <LanguageSwitcher />
+          </div>
         </header>
 
         {/* Page content */}

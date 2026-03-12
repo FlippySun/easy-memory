@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { adminApi, type ApiKeyRecord } from "../api/client";
+import { useI18n } from "../contexts/i18n";
 import {
   Button,
   Card,
@@ -10,6 +11,7 @@ import {
   Toast,
   EmptyState,
   CopyableText,
+  useConfirmDialog,
 } from "../components/ui";
 import {
   Key,
@@ -21,7 +23,19 @@ import {
   ToggleRight,
 } from "lucide-react";
 
+// ========================== 变更记录 ==========================
+// [日期]     2026-03-12
+// [类型]     修复Bug
+// [描述]     修复 API Keys 页面错误地从 lucide-react 导入 ReactNode 的构建问题。
+// [思路]     ReactNode 属于 React 类型系统，应从 react 导入，避免第三方图标包类型出口变化导致构建失败。
+// [影响范围] web/src/pages/ApiKeys.tsx
+// [潜在风险] 无已知风险。
+// ==============================================================
+
 export function ApiKeysPage() {
+  const { t, formatDate, formatNumber } = useI18n();
+  const { confirm: confirmAction, dialog: confirmDialog } =
+    useConfirmDialog();
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -41,13 +55,13 @@ export function ApiKeysPage() {
       setKeys(res.data ?? []);
     } catch {
       if (!options?.silent) {
-        setToast({ message: "Failed to load API keys", type: "error" });
+        setToast({ message: t("apiKeys.loadFailed"), type: "error" });
       }
-      throw new Error("Failed to load API keys");
+      throw new Error(t("apiKeys.loadFailed"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchKeys().catch(() => undefined);
@@ -74,13 +88,13 @@ export function ApiKeysPage() {
 
       setToast({
         message: refreshOk
-          ? "API key created"
-          : "API key created, but list refresh failed",
+          ? t("apiKeys.createSuccess")
+          : t("apiKeys.createRefreshFailed"),
         type: refreshOk ? "success" : "error",
       });
     } catch (err) {
       setToast({
-        message: err instanceof Error ? err.message : "Failed to create key",
+        message: err instanceof Error ? err.message : t("apiKeys.createFailed"),
         type: "error",
       });
     } finally {
@@ -115,14 +129,19 @@ export function ApiKeysPage() {
         refreshOk = false;
       }
 
+      const successMessage = key.is_active
+        ? t("apiKeys.disabled")
+        : t("apiKeys.enabled");
+      const partialMessage = key.is_active
+        ? t("apiKeys.disabledRefreshFailed")
+        : t("apiKeys.enabledRefreshFailed");
+
       setToast({
-        message: refreshOk
-          ? `Key ${key.is_active ? "disabled" : "enabled"}`
-          : `Key ${key.is_active ? "disabled" : "enabled"}, but refresh failed`,
+        message: refreshOk ? successMessage : partialMessage,
         type: refreshOk ? "success" : "error",
       });
     } catch {
-      setToast({ message: "Failed to update key", type: "error" });
+      setToast({ message: t("apiKeys.updateFailed"), type: "error" });
     } finally {
       setActionLoading(null);
     }
@@ -130,11 +149,20 @@ export function ApiKeysPage() {
 
   const handleDelete = async (key: ApiKeyRecord) => {
     const isSecondStage = key.lifecycle_status === "soft_deleted";
-    const confirmed = confirm(
-      isSecondStage
-        ? `Permanently hide key "${key.name}" from Admin UI? It will be physically purged after 30 days.`
-        : `Soft-delete key "${key.name}"? It will disappear from My API Keys and user APIs, but remain visible to Admin.`,
-    );
+    const confirmed = await confirmAction({
+      title: t(
+        isSecondStage
+          ? "apiKeys.confirmSemiDeleteTitle"
+          : "apiKeys.confirmSoftDeleteTitle",
+      ),
+      description: t(
+        isSecondStage
+          ? "apiKeys.confirmSemiDeleteDescription"
+          : "apiKeys.confirmSoftDeleteDescription",
+        { name: key.name },
+      ),
+      variant: "danger",
+    });
     if (!confirmed) return;
     if (actionLoading !== null) return;
     setActionLoading(key.id);
@@ -168,17 +196,17 @@ export function ApiKeysPage() {
 
       const actionMsg =
         res.deletion_stage === "semi_deleted"
-          ? "Key semi-deleted (hidden from Admin UI, purge in 30 days)"
-          : "Key soft-deleted";
+          ? t("apiKeys.semiDeleted")
+          : t("apiKeys.softDeleted");
 
       setToast({
         message: refreshOk
           ? actionMsg
-          : `${actionMsg}, but list refresh failed`,
+          : `${actionMsg}${t("apiKeys.deleteRefreshFailed")}`,
         type: refreshOk ? "success" : "error",
       });
     } catch {
-      setToast({ message: "Failed to delete key", type: "error" });
+      setToast({ message: t("apiKeys.deleteFailed"), type: "error" });
     } finally {
       setActionLoading(null);
     }
@@ -187,15 +215,15 @@ export function ApiKeysPage() {
   const getStatusBadge = (key: ApiKeyRecord) => {
     switch (key.lifecycle_status) {
       case "active":
-        return <Badge variant="success">Active</Badge>;
+        return <Badge variant="success">{t("apiKeys.statuses.active")}</Badge>;
       case "disabled":
-        return <Badge variant="warning">Disabled</Badge>;
+        return <Badge variant="warning">{t("apiKeys.statuses.disabled")}</Badge>;
       case "soft_deleted":
-        return <Badge variant="info">Soft Deleted</Badge>;
+        return <Badge variant="info">{t("apiKeys.statuses.softDeleted")}</Badge>;
       case "expired":
-        return <Badge variant="default">Expired</Badge>;
+        return <Badge variant="default">{t("apiKeys.statuses.expired")}</Badge>;
       default:
-        return <Badge variant="default">Unknown</Badge>;
+        return <Badge variant="default">{t("apiKeys.statuses.unknown")}</Badge>;
     }
   };
 
@@ -217,13 +245,15 @@ export function ApiKeysPage() {
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">API Keys</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {t("apiKeys.title")}
+          </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Manage API keys for service authentication
+            {t("apiKeys.description")}
           </p>
         </div>
         <Button icon={<Plus size={18} />} onClick={() => setShowCreate(true)}>
-          Create Key
+          {t("apiKeys.createKey")}
         </Button>
       </div>
 
@@ -231,15 +261,15 @@ export function ApiKeysPage() {
         {keys.length === 0 ? (
           <EmptyState
             icon={<Key size={32} />}
-            title="No API Keys"
-            description="Create your first API key to enable service authentication"
+            title={t("apiKeys.noKeysTitle")}
+            description={t("apiKeys.noKeysDescription")}
             action={
               <Button
                 size="sm"
                 icon={<Plus size={16} />}
                 onClick={() => setShowCreate(true)}
               >
-                Create Key
+                {t("apiKeys.createKey")}
               </Button>
             }
           />
@@ -248,12 +278,12 @@ export function ApiKeysPage() {
             columns={[
               {
                 key: "name",
-                title: "Name",
+                title: t("apiKeys.name"),
                 render: (r) => <span className="font-medium">{r.name}</span>,
               },
               {
                 key: "prefix",
-                title: "Prefix",
+                title: t("apiKeys.prefix"),
                 render: (r) => (
                   <CopyableText
                     text={r.prefix}
@@ -264,29 +294,29 @@ export function ApiKeysPage() {
               },
               {
                 key: "status",
-                title: "Status",
+                title: t("apiKeys.status"),
                 render: (r) => getStatusBadge(r),
               },
               {
                 key: "rate_limit_per_minute",
-                title: "Rate Limit",
+                title: t("apiKeys.rateLimit"),
                 render: (r) =>
                   r.rate_limit_per_minute
                     ? `${r.rate_limit_per_minute}/min`
-                    : "Default",
+                    : t("apiKeys.defaultRate"),
               },
               {
                 key: "total_requests",
-                title: "Requests",
-                render: (r) => r.total_requests.toLocaleString(),
+                title: t("apiKeys.requests"),
+                render: (r) => formatNumber(r.total_requests),
               },
               {
                 key: "last_used_at",
-                title: "Last Used",
+                title: t("apiKeys.lastUsed"),
                 render: (r) =>
                   r.last_used_at
-                    ? new Date(r.last_used_at).toLocaleDateString()
-                    : "Never",
+                    ? formatDate(r.last_used_at)
+                    : t("common.status.never"),
               },
               {
                 key: "actions",
@@ -297,6 +327,37 @@ export function ApiKeysPage() {
                   const canToggle =
                     r.lifecycle_status === "active" ||
                     r.lifecycle_status === "disabled";
+                  let toggleIcon: ReactNode;
+                  if (isLoading) {
+                    toggleIcon = (
+                      <svg
+                        className="animate-spin w-5 h-5"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                    );
+                  } else if (r.is_active) {
+                    toggleIcon = (
+                      <ToggleRight size={22} className="text-emerald-500" />
+                    );
+                  } else {
+                    toggleIcon = <ToggleLeft size={22} className="text-slate-400" />;
+                  }
+
                   return (
                     <div className="flex items-center justify-end gap-1">
                       {canToggle ? (
@@ -308,36 +369,13 @@ export function ApiKeysPage() {
                               ? "text-emerald-500 hover:text-amber-600 hover:bg-amber-50"
                               : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
                           }`}
-                          title={r.is_active ? "Disable" : "Enable"}
+                          title={
+                            r.is_active
+                              ? t("apiKeys.actions.disable")
+                              : t("apiKeys.actions.enable")
+                          }
                         >
-                          {isLoading ? (
-                            <svg
-                              className="animate-spin w-5 h-5"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                            >
-                              <circle
-                                className="opacity-25"
-                                cx="12"
-                                cy="12"
-                                r="10"
-                                stroke="currentColor"
-                                strokeWidth="4"
-                              />
-                              <path
-                                className="opacity-75"
-                                fill="currentColor"
-                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                              />
-                            </svg>
-                          ) : r.is_active ? (
-                            <ToggleRight
-                              size={22}
-                              className="text-emerald-500"
-                            />
-                          ) : (
-                            <ToggleLeft size={22} className="text-slate-400" />
-                          )}
+                          {toggleIcon}
                         </button>
                       ) : (
                         <div className="w-8 h-8" />
@@ -348,8 +386,8 @@ export function ApiKeysPage() {
                         className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                         title={
                           r.lifecycle_status === "soft_deleted"
-                            ? "Semi Delete"
-                            : "Soft Delete"
+                            ? t("apiKeys.actions.semiDelete")
+                            : t("apiKeys.actions.softDelete")
                         }
                       >
                         <Trash2 size={18} />
@@ -373,7 +411,11 @@ export function ApiKeysPage() {
           setNewKeyResult(null);
           setNewKeyName("");
         }}
-        title={newKeyResult ? "Key Created" : "Create API Key"}
+        title={
+          newKeyResult
+            ? t("apiKeys.createdModalTitle")
+            : t("apiKeys.createModalTitle")
+        }
         footer={
           newKeyResult ? (
             <Button
@@ -382,15 +424,15 @@ export function ApiKeysPage() {
                 setNewKeyResult(null);
               }}
             >
-              Done
+              {t("common.actions.done")}
             </Button>
           ) : (
             <>
               <Button variant="secondary" onClick={() => setShowCreate(false)}>
-                Cancel
+                {t("common.actions.cancel")}
               </Button>
               <Button onClick={handleCreate} loading={creating}>
-                Create
+                {t("common.actions.create")}
               </Button>
             </>
           )
@@ -399,13 +441,14 @@ export function ApiKeysPage() {
         {newKeyResult ? (
           <div className="space-y-3">
             <p className="text-sm text-slate-600">
-              Copy this key now. You won't be able to see it again.
+              {t("apiKeys.createdDescription")}
             </p>
             <div className="flex items-center gap-2 p-3 bg-slate-50 rounded-lg border border-slate-200">
               <code className="flex-1 text-sm break-all">{newKeyResult}</code>
               <button
                 onClick={() => copyKey(newKeyResult)}
                 className="p-1.5 rounded-md hover:bg-slate-200 transition-colors cursor-pointer"
+                title={t("common.actions.copy")}
               >
                 {copied ? (
                   <Check size={16} className="text-emerald-600" />
@@ -417,14 +460,16 @@ export function ApiKeysPage() {
           </div>
         ) : (
           <Input
-            label="Key Name"
+            label={t("apiKeys.keyName")}
             value={newKeyName}
             onChange={(e) => setNewKeyName(e.target.value)}
-            placeholder="e.g., production-server"
+            placeholder={t("apiKeys.keyNamePlaceholder")}
             autoFocus
           />
         )}
       </Modal>
+
+      {confirmDialog}
 
       {toast && (
         <Toast

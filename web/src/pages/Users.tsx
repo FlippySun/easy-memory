@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { authApi, type UserRecord } from "../api/client";
 import { useAuth } from "../contexts/auth";
+import { useI18n } from "../contexts/i18n";
 import {
   Button,
   Card,
@@ -10,6 +11,7 @@ import {
   Badge,
   Toast,
   EmptyState,
+  useConfirmDialog,
 } from "../components/ui";
 import {
   Users,
@@ -23,6 +25,9 @@ import {
 
 export function UsersPage() {
   const { user: currentUser } = useAuth();
+  const { t, formatDate, formatDateTime } = useI18n();
+  const { confirm: confirmAction, dialog: confirmDialog } =
+    useConfirmDialog();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -39,11 +44,11 @@ export function UsersPage() {
       const res = await authApi.listUsers();
       setUsers(res.users);
     } catch {
-      setToast({ message: "Failed to load users", type: "error" });
+      setToast({ message: t("users.loadFailed"), type: "error" });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchUsers();
@@ -57,10 +62,10 @@ export function UsersPage() {
       setShowCreate(false);
       setForm({ username: "", password: "" });
       await fetchUsers();
-      setToast({ message: "User created", type: "success" });
+      setToast({ message: t("users.userCreated"), type: "success" });
     } catch (err) {
       setToast({
-        message: err instanceof Error ? err.message : "Failed to create user",
+        message: err instanceof Error ? err.message : t("users.createFailed"),
         type: "error",
       });
     } finally {
@@ -70,16 +75,29 @@ export function UsersPage() {
 
   const handleRoleToggle = async (user: UserRecord) => {
     const newRole = user.role === "admin" ? "user" : "admin";
-    if (!confirm(`Change ${user.username}'s role to ${newRole}?`)) return;
+    const nextRoleLabel = t(`common.roles.${newRole}`);
+    const confirmed = await confirmAction({
+      title: t("users.changeRoleTitle"),
+      description: t("users.changeRoleDescription", {
+        username: user.username,
+        role: nextRoleLabel,
+      }),
+      variant: "danger",
+    });
+    if (!confirmed) return;
     if (actionLoading !== null) return;
     setActionLoading(user.id);
     try {
       await authApi.updateUser(user.id, { role: newRole });
       await fetchUsers();
-      setToast({ message: `Role changed to ${newRole}`, type: "success" });
+      setToast({
+        message: t("users.roleChanged", { role: nextRoleLabel }),
+        type: "success",
+      });
     } catch (err) {
       setToast({
-        message: err instanceof Error ? err.message : "Failed to update role",
+        message:
+          err instanceof Error ? err.message : t("users.roleUpdateFailed"),
         type: "error",
       });
     } finally {
@@ -94,12 +112,13 @@ export function UsersPage() {
       await authApi.updateUser(user.id, { is_active: !user.is_active });
       await fetchUsers();
       setToast({
-        message: user.is_active ? "User disabled" : "User enabled",
+        message: user.is_active ? t("users.userDisabled") : t("users.userEnabled"),
         type: "success",
       });
     } catch (err) {
       setToast({
-        message: err instanceof Error ? err.message : "Failed to update user",
+        message:
+          err instanceof Error ? err.message : t("users.userUpdateFailed"),
         type: "error",
       });
     } finally {
@@ -108,18 +127,22 @@ export function UsersPage() {
   };
 
   const handleDelete = async (user: UserRecord) => {
-    if (!confirm(`Delete user "${user.username}"? This cannot be undone.`))
-      return;
+    const confirmed = await confirmAction({
+      title: t("users.deleteTitle"),
+      description: t("users.deleteDescription", { username: user.username }),
+      variant: "danger",
+    });
+    if (!confirmed) return;
     if (actionLoading !== null) return;
     setActionLoading(user.id);
     try {
       await authApi.deleteUser(user.id);
       setUsers((prev) => prev.filter((u) => u.id !== user.id));
       await fetchUsers();
-      setToast({ message: "User deleted", type: "success" });
+      setToast({ message: t("users.userDeleted"), type: "success" });
     } catch (err) {
       setToast({
-        message: err instanceof Error ? err.message : "Failed to delete user",
+        message: err instanceof Error ? err.message : t("users.deleteFailed"),
         type: "error",
       });
     } finally {
@@ -139,13 +162,15 @@ export function UsersPage() {
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Users</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {t("users.title")}
+          </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Manage admin panel users and roles
+            {t("users.description")}
           </p>
         </div>
         <Button icon={<Plus size={18} />} onClick={() => setShowCreate(true)}>
-          Create User
+          {t("users.createUser")}
         </Button>
       </div>
 
@@ -153,15 +178,15 @@ export function UsersPage() {
         {users.length === 0 ? (
           <EmptyState
             icon={<Users size={32} />}
-            title="No Users"
-            description="No users have been created yet"
+            title={t("users.noUsersTitle")}
+            description={t("users.noUsersDescription")}
             action={
               <Button
                 size="sm"
                 icon={<Plus size={16} />}
                 onClick={() => setShowCreate(true)}
               >
-                Create User
+                {t("users.createUser")}
               </Button>
             }
           />
@@ -170,7 +195,7 @@ export function UsersPage() {
             columns={[
               {
                 key: "username",
-                title: "Username",
+                title: t("users.username"),
                 render: (r) => (
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-semibold text-xs">
@@ -178,14 +203,14 @@ export function UsersPage() {
                     </div>
                     <span className="font-medium">{r.username}</span>
                     {r.id === currentUser?.id && (
-                      <Badge variant="info">You</Badge>
+                      <Badge variant="info">{t("users.youBadge")}</Badge>
                     )}
                   </div>
                 ),
               },
               {
                 key: "role",
-                title: "Role",
+                title: t("users.role"),
                 render: (r) => (
                   <Badge variant={r.role === "admin" ? "warning" : "default"}>
                     <span className="flex items-center gap-1">
@@ -194,32 +219,34 @@ export function UsersPage() {
                       ) : (
                         <Shield size={12} />
                       )}
-                      {r.role}
+                      {t(`common.roles.${r.role}`)}
                     </span>
                   </Badge>
                 ),
               },
               {
                 key: "status",
-                title: "Status",
+                title: t("users.status"),
                 render: (r) => (
                   <Badge variant={r.is_active ? "success" : "danger"}>
-                    {r.is_active ? "Active" : "Disabled"}
+                    {r.is_active
+                      ? t("common.status.active")
+                      : t("common.status.disabled")}
                   </Badge>
                 ),
               },
               {
                 key: "last_login_at",
-                title: "Last Login",
+                title: t("users.lastLogin"),
                 render: (r) =>
                   r.last_login_at
-                    ? new Date(r.last_login_at).toLocaleString()
-                    : "Never",
+                    ? formatDateTime(r.last_login_at)
+                    : t("common.status.never"),
               },
               {
                 key: "created_at",
-                title: "Created",
-                render: (r) => new Date(r.created_at).toLocaleDateString(),
+                title: t("users.created"),
+                render: (r) => formatDate(r.created_at),
               },
               {
                 key: "actions",
@@ -234,7 +261,9 @@ export function UsersPage() {
                         onClick={() => handleRoleToggle(r)}
                         disabled={isSelf || isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-                        title={`Change to ${r.role === "admin" ? "user" : "admin"}`}
+                        title={t("users.actions.changeRole", {
+                          role: t(`common.roles.${r.role === "admin" ? "user" : "admin"}`),
+                        })}
                       >
                         {r.role === "admin" ? (
                           <Shield size={18} />
@@ -246,7 +275,11 @@ export function UsersPage() {
                         onClick={() => handleToggleActive(r)}
                         disabled={isSelf || isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-                        title={r.is_active ? "Disable" : "Enable"}
+                        title={
+                          r.is_active
+                            ? t("users.actions.disable")
+                            : t("users.actions.enable")
+                        }
                       >
                         {r.is_active ? (
                           <UserX size={18} />
@@ -258,7 +291,7 @@ export function UsersPage() {
                         onClick={() => handleDelete(r)}
                         disabled={isSelf || isLoading}
                         className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-                        title="Delete"
+                        title={t("users.actions.delete")}
                       >
                         {isLoading ? (
                           <svg
@@ -298,42 +331,44 @@ export function UsersPage() {
       <Modal
         open={showCreate}
         onClose={() => setShowCreate(false)}
-        title="Create User"
+        title={t("users.createModalTitle")}
         footer={
           <>
             <Button variant="secondary" onClick={() => setShowCreate(false)}>
-              Cancel
+              {t("common.actions.cancel")}
             </Button>
             <Button onClick={handleCreate} loading={creating}>
-              Create
+              {t("common.actions.create")}
             </Button>
           </>
         }
       >
         <div className="space-y-4">
           <Input
-            label="Username"
+            label={t("users.username")}
             value={form.username}
             onChange={(e) =>
               setForm((p) => ({ ...p, username: e.target.value }))
             }
-            placeholder="e.g., john-doe"
+            placeholder={t("users.usernamePlaceholder")}
             autoFocus
           />
           <Input
-            label="Password"
+            label={t("auth.credentialLabel")}
             type="password"
             value={form.password}
             onChange={(e) =>
               setForm((p) => ({ ...p, password: e.target.value }))
             }
-            placeholder="Min 6 characters"
+            placeholder={t("users.credentialHint")}
           />
           <p className="text-xs text-slate-500">
-            New users are created with the "user" role by default.
+            {t("users.defaultRoleHint")}
           </p>
         </div>
       </Modal>
+
+      {confirmDialog}
 
       {toast && (
         <Toast

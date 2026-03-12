@@ -115,7 +115,7 @@ export async function createRemoteMcpServer(
 ): Promise<void> {
   const server = new McpServer({
     name: "easy-memory-remote",
-    version: "0.5.6",
+    version: "0.5.7",
   });
 
   const memorySaveDescription =

@@ -257,7 +257,7 @@ function createApp(container: AppContainer): Hono<Env> {
     const transport = new WebStandardStreamableHTTPServerTransport({});
     const mcpServer = new McpServer({
       name: "easy-memory",
-      version: "0.5.6",
+      version: "0.5.7",
     });
     registerTools(mcpServer, container, {
       auditContext: {
@@ -498,7 +498,7 @@ function createApp(container: AppContainer): Hono<Env> {
     return c.json({
       serverInfo: {
         name: "easy-memory",
-        version: "0.5.6",
+        version: "0.5.7",
       },
       authentication: {
         required: true,

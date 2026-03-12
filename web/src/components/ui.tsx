@@ -1,4 +1,20 @@
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+} from "react";
+import { useI18n } from "../contexts/i18n";
+
+// ========================== 变更记录 ==========================
+// [日期]     2026-03-11
+// [类型]     新增功能
+// [描述]     为共享 UI 组件接入多语言默认文案、确认对话能力与更稳定的交互语义。
+// [思路]     把默认提示文案收口到共享层，减少页面级重复翻译；同时补上应用内确认流所需的基础设施，替代原生 confirm。
+// [影响范围] web/src/pages/*、web/src/components/Layout.tsx
+// [潜在风险] 若页面仍绕过共享能力继续使用原生 confirm 或硬编码文案，会出现局部语言不一致，需要在页面迁移阶段逐步收敛。
+// ==============================================================
 
 // =====================================================================
 // Button
@@ -20,7 +36,7 @@ export function Button({
   className = "",
   disabled,
   ...props
-}: ButtonProps) {
+}: Readonly<ButtonProps>) {
   const base =
     "inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
 
@@ -41,31 +57,36 @@ export function Button({
     lg: "px-5 py-2.5 text-base",
   };
 
+  let leadingIcon: ReactNode = null;
+  if (loading) {
+    leadingIcon = (
+      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+        <circle
+          className="opacity-25"
+          cx="12"
+          cy="12"
+          r="10"
+          stroke="currentColor"
+          strokeWidth="4"
+        />
+        <path
+          className="opacity-75"
+          fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+        />
+      </svg>
+    );
+  } else if (icon) {
+    leadingIcon = <span className="shrink-0">{icon}</span>;
+  }
+
   return (
     <button
       className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
       disabled={disabled || loading}
       {...props}
     >
-      {loading ? (
-        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      ) : icon ? (
-        <span className="shrink-0">{icon}</span>
-      ) : null}
+      {leadingIcon}
       {children}
     </button>
   );
@@ -88,8 +109,9 @@ export function Input({
   className = "",
   id,
   ...props
-}: InputProps) {
-  const inputId = id || label?.toLowerCase().replace(/\s+/g, "-");
+}: Readonly<InputProps>) {
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
 
   return (
     <div className="space-y-1.5">
@@ -142,7 +164,7 @@ export function Card({
   className = "",
   padding = true,
   hover = false,
-}: CardProps) {
+}: Readonly<CardProps>) {
   return (
     <div
       className={`
@@ -171,7 +193,7 @@ export function Badge({
   children,
   variant = "default",
   className = "",
-}: BadgeProps) {
+}: Readonly<BadgeProps>) {
   const variants = {
     default: "bg-slate-100 text-slate-700",
     success: "bg-emerald-50 text-emerald-700",
@@ -207,7 +229,7 @@ export function StatCard({
   subtitle,
   icon,
   trend,
-}: StatCardProps) {
+}: Readonly<StatCardProps>) {
   return (
     <Card className="animate-fade-in">
       <div className="flex items-start justify-between">
@@ -250,7 +272,7 @@ export function EmptyState({
   title,
   description,
   action,
-}: EmptyStateProps) {
+}: Readonly<EmptyStateProps>) {
   return (
     <div className="flex flex-col items-center justify-center py-12 text-center animate-fade-in">
       <div className="p-3 rounded-full bg-slate-100 text-slate-400 mb-4">
@@ -275,7 +297,15 @@ interface ModalProps {
   footer?: ReactNode;
 }
 
-export function Modal({ open, onClose, title, children, footer }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+}: Readonly<ModalProps>) {
+  const { t } = useI18n();
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -289,9 +319,11 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div
+      <button
+        type="button"
         className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
+        aria-label={t("common.actions.close")}
       />
       <div className="relative bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-lg mx-4 animate-scale-in">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
@@ -299,6 +331,7 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
           <button
             onClick={onClose}
             className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+            aria-label={t("common.actions.close")}
           >
             <svg
               className="w-5 h-5"
@@ -326,6 +359,70 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
   );
 }
 
+interface ConfirmDialogOptions {
+  title: string;
+  description: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: "primary" | "danger";
+}
+
+interface ConfirmDialogState extends Required<ConfirmDialogOptions> {
+  resolve: (result: boolean) => void;
+}
+
+export function useConfirmDialog() {
+  const { t } = useI18n();
+  const [state, setState] = useState<ConfirmDialogState | null>(null);
+
+  const closeDialog = useCallback((result: boolean) => {
+    setState((current) => {
+      current?.resolve(result);
+      return null;
+    });
+  }, []);
+
+  const confirm = useCallback(
+    (options: ConfirmDialogOptions) =>
+      new Promise<boolean>((resolve) => {
+        setState({
+          title: options.title,
+          description: options.description,
+          confirmLabel: options.confirmLabel ?? t("common.actions.confirm"),
+          cancelLabel: options.cancelLabel ?? t("common.actions.cancel"),
+          variant: options.variant ?? "primary",
+          resolve,
+        });
+      }),
+    [t],
+  );
+
+  const dialog = state ? (
+    <Modal
+      open
+      onClose={() => closeDialog(false)}
+      title={state.title}
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => closeDialog(false)}>
+            {state.cancelLabel}
+          </Button>
+          <Button
+            variant={state.variant === "danger" ? "danger" : "primary"}
+            onClick={() => closeDialog(true)}
+          >
+            {state.confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-slate-600">{state.description}</p>
+    </Modal>
+  ) : null;
+
+  return { confirm, dialog };
+}
+
 // =====================================================================
 // Table
 // =====================================================================
@@ -351,11 +448,13 @@ export function Table<T>({
   rowKey,
   emptyMessage,
   onRowClick,
-}: TableProps<T>) {
+}: Readonly<TableProps<T>>) {
+  const { t } = useI18n();
+
   if (data.length === 0) {
     return (
       <div className="text-center py-8 text-sm text-slate-500">
-        {emptyMessage || "No data"}
+        {emptyMessage || t("common.table.noData")}
       </div>
     );
   }
@@ -387,9 +486,28 @@ export function Table<T>({
                   key={col.key}
                   className={`py-3 px-4 text-slate-700 ${col.className || ""}`}
                 >
-                  {col.render
-                    ? col.render(row)
-                    : String((row as Record<string, unknown>)[col.key] ?? "")}
+                    {col.render
+                      ? col.render(row)
+                      : (() => {
+                          const rawValue = (row as Record<string, unknown>)[col.key];
+                          if (rawValue === null || rawValue === undefined) {
+                            return "";
+                          }
+                          if (
+                            typeof rawValue === "string" ||
+                            typeof rawValue === "number"
+                          ) {
+                            return rawValue;
+                          }
+                          if (typeof rawValue === "boolean") {
+                            return t(
+                              rawValue
+                                ? "common.boolean.true"
+                                : "common.boolean.false",
+                            );
+                          }
+                          return JSON.stringify(rawValue);
+                        })()}
                 </td>
               ))}
             </tr>
@@ -410,7 +528,11 @@ interface ToastProps {
   onClose: () => void;
 }
 
-export function Toast({ message, type = "info", onClose }: ToastProps) {
+export function Toast({
+  message,
+  type = "info",
+  onClose,
+}: Readonly<ToastProps>) {
   const colors = {
     success: "bg-emerald-50 text-emerald-800 border-emerald-200",
     error: "bg-red-50 text-red-800 border-red-200",
@@ -426,7 +548,7 @@ export function Toast({ message, type = "info", onClose }: ToastProps) {
 
   return (
     <div
-      className={`fixed top-4 right-4 z-[100] flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg animate-slide-in ${colors[type]}`}
+      className={`fixed top-4 right-4 z-100 flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg animate-slide-in ${colors[type]}`}
     >
       <p className="text-sm font-medium">{message}</p>
       <button
@@ -467,7 +589,8 @@ export function CopyableText({
   displayText,
   className = "",
   mono = true,
-}: CopyableTextProps) {
+}: Readonly<CopyableTextProps>) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (e: React.MouseEvent) => {
@@ -477,30 +600,22 @@ export function CopyableText({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for older browsers
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopied(false);
     }
   };
 
   return (
-    <span
+    <button
+      type="button"
       className={`group inline-flex items-center gap-1.5 cursor-pointer ${className}`}
       onClick={handleCopy}
-      title="Click to copy"
+      title={t("common.copy.click")}
+      aria-label={t("common.copy.click")}
     >
       <span className={mono ? "font-mono text-xs" : ""}>
         {displayText ?? text}
       </span>
-      <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex-shrink-0">
+      <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0">
         {copied ? (
           <svg
             className="w-3.5 h-3.5 text-emerald-500"
@@ -530,9 +645,9 @@ export function CopyableText({
       </span>
       {copied && (
         <span className="text-xs text-emerald-600 font-medium animate-fade-in">
-          Copied!
+          {t("common.copy.copied")}
         </span>
       )}
-    </span>
+    </button>
   );
 }

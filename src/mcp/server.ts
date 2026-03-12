@@ -788,7 +788,7 @@ export async function startMcpShell(container: AppContainer): Promise<void> {
 
   const server = new McpServer({
     name: "easy-memory",
-    version: "0.5.6",
+    version: "0.5.7",
   });
 
   registerTools(server, container, {

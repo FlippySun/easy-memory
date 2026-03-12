@@ -459,7 +459,7 @@ curl http://your-server:3080/health
 ```bash
 docker pull thj8632/easy-memory:latest
 # 或指定版本
-docker pull thj8632/easy-memory:0.5.6
+docker pull thj8632/easy-memory:0.5.7
 ```
 
 支持平台：`linux/amd64`, `linux/arm64`
@@ -702,6 +702,7 @@ pnpm install          # 安装依赖
 pnpm build            # TypeScript 编译
 pnpm typecheck        # 类型检查
 pnpm test             # 单元测试 (850+ tests)
+pnpm verify:local     # 本地提交前快速校验 (typecheck + test)
 pnpm build:web        # 构建 Web UI 前端
 pnpm build:all        # 构建后端 + 前端
 pnpm dev:web          # 前端开发模式 (HMR)
