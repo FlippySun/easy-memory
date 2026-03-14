@@ -22,6 +22,11 @@ describe("parseAppConfig", () => {
     expect(config.geminiProjectId).toBe("");
     expect(config.geminiRegion).toBe("us-central1");
     expect(config.geminiModel).toBe("gemini-embedding-001");
+    expect(config.openaiEmbeddingApiKey).toBe("");
+    expect(config.openaiEmbeddingBaseUrl).toBe(
+      "https://api.vectorengine.ai/v1",
+    );
+    expect(config.openaiEmbeddingModel).toBe("text-embedding-3-small");
     expect(config.defaultProject).toBe("default");
     expect(config.rateLimitPerMinute).toBe(60);
     expect(config.geminiMaxPerHour).toBe(200);
@@ -32,6 +37,33 @@ describe("parseAppConfig", () => {
     expect(config.httpHost).toBe("127.0.0.1");
     expect(config.trustProxy).toBe(false);
     expect(config.requireTls).toBe(false);
+  });
+
+  it("should infer openai-auto when OPENAI_EMBEDDING_API_KEY is present", () => {
+    const config = parseAppConfig({
+      OPENAI_EMBEDDING_API_KEY: "test-key",
+    });
+
+    expect(config.embeddingProvider).toBe("openai-auto");
+  });
+
+  it("should infer auto when Gemini credentials are present and provider is omitted", () => {
+    const config = parseAppConfig({
+      GEMINI_API_KEY: "test-key",
+      GEMINI_PROJECT_ID: "test-project",
+    });
+
+    expect(config.embeddingProvider).toBe("auto");
+  });
+
+  it("should prefer OpenAI-compatible relay when both remote credential sets are present", () => {
+    const config = parseAppConfig({
+      OPENAI_EMBEDDING_API_KEY: "openai-key",
+      GEMINI_API_KEY: "gemini-key",
+      GEMINI_PROJECT_ID: "gemini-project",
+    });
+
+    expect(config.embeddingProvider).toBe("openai-auto");
   });
 
   it("should override defaults with env vars", () => {
@@ -89,6 +121,18 @@ describe("parseAppConfig", () => {
     ).toThrow(/requires GEMINI_PROJECT_ID/);
   });
 
+  it("should throw when openai mode lacks OPENAI_EMBEDDING_API_KEY", () => {
+    expect(() => parseAppConfig({ EMBEDDING_PROVIDER: "openai" })).toThrow(
+      /requires OPENAI_EMBEDDING_API_KEY/,
+    );
+  });
+
+  it("should throw when openai-auto mode lacks OPENAI_EMBEDDING_API_KEY", () => {
+    expect(() => parseAppConfig({ EMBEDDING_PROVIDER: "openai-auto" })).toThrow(
+      /requires OPENAI_EMBEDDING_API_KEY/,
+    );
+  });
+
   it("should accept gemini mode with GEMINI_API_KEY and GEMINI_PROJECT_ID", () => {
     const config = parseAppConfig({
       EMBEDDING_PROVIDER: "gemini",
@@ -99,6 +143,19 @@ describe("parseAppConfig", () => {
     expect(config.geminiApiKey).toBe("test-key");
     expect(config.geminiProjectId).toBe("test-project");
     expect(config.geminiRegion).toBe("us-central1");
+  });
+
+  it("should accept openai mode with API key and custom endpoint settings", () => {
+    const config = parseAppConfig({
+      EMBEDDING_PROVIDER: "openai",
+      OPENAI_EMBEDDING_API_KEY: "test-key",
+      OPENAI_EMBEDDING_BASE_URL: "https://proxy.example.com/v1",
+      OPENAI_EMBEDDING_MODEL: "text-embedding-3-large",
+    });
+    expect(config.embeddingProvider).toBe("openai");
+    expect(config.openaiEmbeddingApiKey).toBe("test-key");
+    expect(config.openaiEmbeddingBaseUrl).toBe("https://proxy.example.com/v1");
+    expect(config.openaiEmbeddingModel).toBe("text-embedding-3-large");
   });
 
   it("should override geminiRegion via GEMINI_REGION env var", () => {
@@ -187,6 +244,28 @@ describe("createContainer", () => {
     const container = createContainer(config);
 
     expect(container.embedding.providerNames).toEqual(["gemini"]);
+  });
+
+  it("should create container with openai-only provider", () => {
+    const config = parseAppConfig({
+      EMBEDDING_PROVIDER: "openai",
+      OPENAI_EMBEDDING_API_KEY: "test-key",
+    });
+    const container = createContainer(config);
+
+    expect(container.embedding.providerNames).toEqual(["openai"]);
+  });
+
+  it("should create container with openai-auto provider", () => {
+    const config = parseAppConfig({
+      EMBEDDING_PROVIDER: "openai-auto",
+      OPENAI_EMBEDDING_API_KEY: "test-key",
+    });
+    const container = createContainer(config);
+
+    expect(container.embedding.providerNames).toContain("openai");
+    expect(container.embedding.providerNames).toContain("ollama");
+    expect(container.embedding.providerNames.length).toBe(2);
   });
 
   it("should wire rateLimiter into embedding shouldUseProvider", () => {

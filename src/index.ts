@@ -48,6 +48,8 @@ async function main(): Promise<void> {
     embeddingProvider: config.embeddingProvider,
     ollamaModel: config.ollamaModel,
     geminiModel: config.geminiModel,
+    openaiEmbeddingBaseUrl: config.openaiEmbeddingBaseUrl,
+    openaiEmbeddingModel: config.openaiEmbeddingModel,
     defaultProject: config.defaultProject,
   });
 

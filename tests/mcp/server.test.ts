@@ -12,6 +12,7 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResponse>;
 
 describe("mcp/server registerTools 审计链路", () => {
   let handlers: Record<string, ToolHandler>;
+  let schemas: Record<string, Record<string, unknown>>;
   let buildEntryMock: ReturnType<typeof vi.fn>;
   let auditRecordMock: ReturnType<typeof vi.fn>;
   let analyticsIngestMock: ReturnType<typeof vi.fn>;
@@ -20,6 +21,7 @@ describe("mcp/server registerTools 审计链路", () => {
 
   beforeEach(() => {
     handlers = {};
+    schemas = {};
 
     buildEntryMock = vi.fn((params: Record<string, unknown>) => ({
       event_id: "evt-1",
@@ -89,9 +91,10 @@ describe("mcp/server registerTools 审计链路", () => {
         (
           name: string,
           _description: string,
-          _schema: unknown,
+          schema: Record<string, unknown>,
           handler: ToolHandler,
         ) => {
+          schemas[name] = schema;
           handlers[name] = handler;
         },
       ),
@@ -197,5 +200,23 @@ describe("mcp/server registerTools 审计链路", () => {
     expect(handlers.easy_memory_search).toBeDefined();
     expect(handlers.easy_memory_forget).toBeDefined();
     expect(handlers.easy_memory_status).toBeDefined();
+  });
+
+  it("memory_search MCP schema 暴露 cross_model 以匹配运行时搜索能力", () => {
+    // [2026-03-14][修复Bug] 防止 /mcp 工具发现层遗漏 cross_model，导致客户端无法显式排查 mixed-model 可见性问题。
+    expect(schemas.memory_search).toHaveProperty("cross_model");
+    expect(schemas.easy_memory_search).toHaveProperty("cross_model");
+  });
+
+  it("memory_save MCP schema 在外壳层拒绝纯空白 content", () => {
+    // [2026-03-14][修复Bug] 防止纯空白内容通过 MCP 发现层后才在核心层失败，保持工具 schema 与核心 save 语义一致。
+    const saveContentSchema = schemas.memory_save.content as {
+      safeParse: (input: unknown) => { success: boolean };
+    };
+
+    expect(saveContentSchema.safeParse("   ").success).toBe(false);
+    expect(saveContentSchema.safeParse("meaningful content").success).toBe(
+      true,
+    );
   });
 });

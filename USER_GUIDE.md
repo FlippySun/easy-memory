@@ -174,6 +174,17 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=这里换成你的管理员密码
 ```
 
+**再二选一完成向量模型配置**：
+
+```dotenv
+# 方案 1：推荐远端 —— 官方 OpenAI 向量模型，经 relay 接入（需手动切换）
+EMBEDDING_PROVIDER=openai-auto
+OPENAI_EMBEDDING_API_KEY=这里换成你的 relay API Key
+
+# 方案 2：如果你只想纯本地运行
+# EMBEDDING_PROVIDER=ollama
+```
+
 > 💡 **如何生成随机密码？** 在终端运行：`openssl rand -hex 16`
 
 保存并退出编辑器（nano 按 `Ctrl+X`，然后 `Y`，回车）。
@@ -620,16 +631,19 @@ docker compose -f docker-compose.prod.yml up -d easy-memory
 
 ### Q: Ollama 占用内存太大？
 
-**A**: `bge-m3` 模型需要约 2GB 内存。如果服务器内存紧张，可以改用远程 Gemini Embedding（无需本地 Ollama）：
+**A**: `bge-m3` 模型需要约 2GB 内存。如果服务器内存紧张，可以改用默认远端方案：官方 OpenAI 向量模型，经 relay 接入（无需本地 Ollama）：
 
 ```dotenv
 # .env 中修改
-EMBEDDING_PROVIDER=gemini
-GEMINI_API_KEY=你的Google API Key
-GEMINI_PROJECT_ID=你的GCP项目ID
+EMBEDDING_PROVIDER=openai-auto
+OPENAI_EMBEDDING_API_KEY=你的 relay API Key
+OPENAI_EMBEDDING_BASE_URL=https://api.vectorengine.ai/v1
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-然后在 `docker-compose.prod.yml` 中注释掉 `ollama` 和 `ollama-init` 服务即可。
+系统会自动请求 1024 维向量，与当前 Qdrant collection 对齐。
+
+如果你更偏好 Google 官方 Vertex AI，也仍然可以使用 `EMBEDDING_PROVIDER=gemini` 或 `auto`。
 
 ### Q: 报错 `QDRANT_API_KEY` 不匹配？
 

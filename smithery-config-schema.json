@@ -21,14 +21,54 @@
     },
     "EMBEDDING_PROVIDER": {
       "type": "string",
-      "description": "Embedding provider: 'ollama' (local, free), 'gemini' (Google cloud), or 'auto' (Ollama first, Gemini fallback)",
-      "enum": ["ollama", "gemini", "auto"],
+      "description": "Embedding provider: 'ollama' (safe local default), 'gemini' (Google Vertex AI), 'openai' (official OpenAI embedding via compatible relay), 'auto' (Gemini + Ollama fallback), or 'openai-auto' (official OpenAI embedding via relay + Ollama fallback)",
+      "enum": ["ollama", "gemini", "openai", "auto", "openai-auto"],
       "default": "ollama",
+      "x-from": "env"
+    },
+    "OLLAMA_MODEL": {
+      "type": "string",
+      "description": "Ollama embedding model name",
+      "default": "bge-m3",
       "x-from": "env"
     },
     "GEMINI_API_KEY": {
       "type": "string",
       "description": "Google Gemini API key (required if EMBEDDING_PROVIDER is 'gemini' or 'auto')",
+      "x-from": "env"
+    },
+    "GEMINI_PROJECT_ID": {
+      "type": "string",
+      "description": "Google Cloud Project ID for Vertex AI (required if EMBEDDING_PROVIDER is 'gemini' or 'auto')",
+      "x-from": "env"
+    },
+    "GEMINI_REGION": {
+      "type": "string",
+      "description": "Google Cloud Vertex AI region",
+      "default": "us-central1",
+      "x-from": "env"
+    },
+    "GEMINI_MODEL": {
+      "type": "string",
+      "description": "Google Vertex AI embedding model name",
+      "default": "gemini-embedding-001",
+      "x-from": "env"
+    },
+    "OPENAI_EMBEDDING_API_KEY": {
+      "type": "string",
+      "description": "API key for an OpenAI-compatible embedding endpoint (required if EMBEDDING_PROVIDER is 'openai' or 'openai-auto')",
+      "x-from": "env"
+    },
+    "OPENAI_EMBEDDING_BASE_URL": {
+      "type": "string",
+      "description": "Base URL or full /embeddings endpoint for the relay that serves official OpenAI embedding models",
+      "default": "https://api.vectorengine.ai/v1",
+      "x-from": "env"
+    },
+    "OPENAI_EMBEDDING_MODEL": {
+      "type": "string",
+      "description": "Model name for the OpenAI-compatible embedding endpoint",
+      "default": "text-embedding-3-small",
       "x-from": "env"
     },
     "DEFAULT_PROJECT": {

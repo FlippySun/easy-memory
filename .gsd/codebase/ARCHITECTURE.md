@@ -12,6 +12,7 @@
 easy-memory is a persistent semantic memory service for AI agents. It stores, searches, and manages "memories" (text snippets with metadata) backed by Qdrant vector database with hybrid retrieval (dense embeddings + BM25 sparse vectors fused via RRF).
 
 The system operates in three modes:
+
 1. **MCP stdio** (default): Local process communicating with AI clients (Claude, Cursor) via MCP JSON-RPC over stdin/stdout.
 2. **HTTP REST**: Hono-based HTTP server for VPS deployment, supporting Bearer token auth, managed API keys, JWT user auth, and an admin dashboard.
 3. **Remote proxy**: Lightweight local stdio MCP server that forwards all calls to a remote HTTP easy-memory instance.
@@ -101,13 +102,13 @@ Zod schemas as the single source of truth for all I/O validation.
 
 ## Entry Points
 
-| Entry Point | File | Purpose |
-|-------------|------|---------|
-| Main process | `src/index.ts` | Mode router: remote proxy → MCP stdio → HTTP. Parses env, creates container, starts shell. |
-| MCP Shell | `src/mcp/server.ts` → `startMcpShell()` | Registers tools on McpServer, connects SafeStdioTransport. |
-| HTTP Shell | `src/api/server.ts` → `startHttpShell()` | Creates Hono app, registers routes/middleware, starts `@hono/node-server`. |
-| Remote Proxy | `src/mcp/remote-server.ts` → `createRemoteMcpServer()` | Stdio MCP server forwarding to remote HTTP API. |
-| MCP over HTTP | `src/api/server.ts` → `app.all("/mcp")` | Stateless per-request MCP server via `WebStandardStreamableHTTPServerTransport`. |
+| Entry Point   | File                                                   | Purpose                                                                                    |
+| ------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Main process  | `src/index.ts`                                         | Mode router: remote proxy → MCP stdio → HTTP. Parses env, creates container, starts shell. |
+| MCP Shell     | `src/mcp/server.ts` → `startMcpShell()`                | Registers tools on McpServer, connects SafeStdioTransport.                                 |
+| HTTP Shell    | `src/api/server.ts` → `startHttpShell()`               | Creates Hono app, registers routes/middleware, starts `@hono/node-server`.                 |
+| Remote Proxy  | `src/mcp/remote-server.ts` → `createRemoteMcpServer()` | Stdio MCP server forwarding to remote HTTP API.                                            |
+| MCP over HTTP | `src/api/server.ts` → `app.all("/mcp")`                | Stateless per-request MCP server via `WebStandardStreamableHTTPServerTransport`.           |
 
 ## Data Flow
 
@@ -184,19 +185,19 @@ Zod schemas as the single source of truth for all I/O validation.
 
 - **Key bindings:**
 
-| Service | Interface | Purpose |
-|---------|-----------|---------|
-| `container.qdrant` | `QdrantService` | Vector DB operations |
-| `container.embedding` | `EmbeddingService` | Text → vector conversion |
-| `container.bm25` | `BM25Encoder` | Sparse vector encoding |
-| `container.rateLimiter` | `RateLimiter` | Global + Gemini budget limits |
-| `container.audit` | `AuditService` | JSONL hot audit writes |
-| `container.analytics` | `AnalyticsService` | SQLite aggregation + queries |
-| `container.apiKeyManager` | `ApiKeyManager` | API key CRUD + validation |
-| `container.banManager` | `BanManager` | IP/key ban enforcement |
-| `container.runtimeConfig` | `RuntimeConfigManager` | Mutable runtime settings |
-| `container.auth` | `AuthService` | User auth + JWT + RBAC |
-| `container.memoryOwnership` | `MemoryOwnershipService` | Ownership backfill |
+| Service                     | Interface                | Purpose                       |
+| --------------------------- | ------------------------ | ----------------------------- |
+| `container.qdrant`          | `QdrantService`          | Vector DB operations          |
+| `container.embedding`       | `EmbeddingService`       | Text → vector conversion      |
+| `container.bm25`            | `BM25Encoder`            | Sparse vector encoding        |
+| `container.rateLimiter`     | `RateLimiter`            | Global + Gemini budget limits |
+| `container.audit`           | `AuditService`           | JSONL hot audit writes        |
+| `container.analytics`       | `AnalyticsService`       | SQLite aggregation + queries  |
+| `container.apiKeyManager`   | `ApiKeyManager`          | API key CRUD + validation     |
+| `container.banManager`      | `BanManager`             | IP/key ban enforcement        |
+| `container.runtimeConfig`   | `RuntimeConfigManager`   | Mutable runtime settings      |
+| `container.auth`            | `AuthService`            | User auth + JWT + RBAC        |
+| `container.memoryOwnership` | `MemoryOwnershipService` | Ownership backfill            |
 
 ## Authentication Architecture
 
@@ -236,4 +237,4 @@ The system implements a layered auth model:
 
 ---
 
-*Architecture analysis: 2026-03-14*
+_Architecture analysis: 2026-03-14_

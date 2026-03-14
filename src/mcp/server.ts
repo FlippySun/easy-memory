@@ -80,6 +80,179 @@ type AuditRecordInput = {
   extra?: Partial<AuditLogEntry>;
 };
 
+type ServerCardInputSchema = {
+  type: "object";
+  properties: Record<string, unknown>;
+  required?: string[];
+};
+
+// ========================== 变更记录 ==========================
+// [日期]     2026-03-14
+// [类型]     配置变更
+// [描述]     抽出 MCP/HTTP 共享的发现层 input schema，并补齐 search 的 cross_model 与分层过滤字段，同时收紧 limit/content 的声明，避免 server-card 与 /mcp tool 元数据继续落后于真实运行时能力。
+// [思路]     第二轮交叉审查确认主链路已修复，但发现层契约仍有漂移风险；把 server-card 复用的 schema 收敛到同一模块，再把 integer/非空白约束补齐，能让 MCP 壳与 HTTP 壳共用同一份更接近运行时事实的“门牌说明书”。
+// [影响范围] src/mcp/server.ts、src/api/server.ts / schemas.ts，以及对应的 server-card / MCP schema 回归测试。
+// [潜在风险] 仅收紧此前已由核心层执行的约束，不改变合法请求的默认行为；无已知运行时破坏风险。
+// ==============================================================
+export const MEMORY_SAVE_SERVER_CARD_INPUT_SCHEMA: ServerCardInputSchema = {
+  type: "object",
+  properties: {
+    content: {
+      type: "string",
+      minLength: 1,
+      pattern: String.raw`.*\S.*`,
+      description:
+        "The content to save as a memory (must include at least one non-whitespace character)",
+    },
+    project: {
+      type: "string",
+      description: "Project identifier (defaults to configured project)",
+    },
+    source: {
+      type: "string",
+      enum: ["conversation", "file_watch", "manual"],
+      description: "How this memory was captured",
+    },
+    fact_type: {
+      type: "string",
+      enum: [
+        "verified_fact",
+        "decision",
+        "hypothesis",
+        "discussion",
+        "observation",
+      ],
+      description: "Classification of the memory",
+    },
+    tags: {
+      type: "array",
+      items: { type: "string" },
+      description: "Tags for categorization",
+    },
+    confidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description: "Confidence level (0-1)",
+    },
+    source_file: {
+      type: "string",
+      description: "Source file path (POSIX format)",
+    },
+    source_line: {
+      type: "integer",
+      minimum: 1,
+      description: "Line number in source file",
+    },
+    related_ids: {
+      type: "array",
+      items: { type: "string" },
+      description: "Related memory IDs",
+    },
+    device_id: {
+      type: "string",
+      description: "Device identifier for cross-device memory isolation",
+    },
+    git_branch: {
+      type: "string",
+      description: "Git branch name for branch-scoped memories",
+    },
+    memory_scope: {
+      type: "string",
+      enum: ["global", "project", "branch"],
+      description: "Memory visibility scope (default: project)",
+    },
+    memory_type: {
+      type: "string",
+      enum: ["long_term", "short_term"],
+      description: "Memory persistence type (default: long_term)",
+    },
+    weight: {
+      type: "number",
+      minimum: 0,
+      maximum: 10,
+      description: "Importance weight for search ranking (default: 1.0)",
+    },
+  },
+  required: ["content"],
+};
+
+export const MEMORY_SEARCH_SERVER_CARD_INPUT_SCHEMA: ServerCardInputSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Search query text" },
+    project: { type: "string", description: "Project identifier" },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: 20,
+      description: "Maximum results (default: 5)",
+    },
+    threshold: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+      description: "Minimum similarity score (default: 0.55)",
+    },
+    include_outdated: {
+      type: "boolean",
+      description: "Include outdated memories",
+    },
+    tags: {
+      type: "array",
+      items: { type: "string" },
+      description: "Filter by tags",
+    },
+    cross_model: {
+      type: "boolean",
+      description: "Allow searching across mixed embedding models",
+    },
+    memory_scope: {
+      type: "string",
+      enum: ["global", "project", "branch"],
+      description: "Filter by memory scope",
+    },
+    device_id: {
+      type: "string",
+      description: "Filter by device identifier",
+    },
+    git_branch: {
+      type: "string",
+      description: "Filter by git branch",
+    },
+  },
+  required: ["query"],
+};
+
+export const MEMORY_FORGET_SERVER_CARD_INPUT_SCHEMA: ServerCardInputSchema = {
+  type: "object",
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+      description: "Memory UUID to forget",
+    },
+    action: {
+      type: "string",
+      enum: ["archive", "outdated", "delete"],
+      description: "Forget action type",
+    },
+    reason: {
+      type: "string",
+      description: "Reason for forgetting",
+    },
+    project: { type: "string", description: "Project identifier" },
+  },
+  required: ["id", "action", "reason"],
+};
+
+export const MEMORY_STATUS_SERVER_CARD_INPUT_SCHEMA: ServerCardInputSchema = {
+  type: "object",
+  properties: {
+    project: { type: "string", description: "Project identifier" },
+  },
+};
+
 function mapSaveResult(status: string): {
   outcome: AuditOutcome;
   httpStatus: number;
@@ -265,7 +438,14 @@ ATOMICITY: When correcting outdated information, ALWAYS save the new version fir
   };
 
   const memorySaveSchema = {
-    content: z.string().min(1).describe("The content to save as a memory"),
+    // [2026-03-14][修复Bug] MCP 外壳层同步使用 trim()+min(1)，阻止纯空白内容绕过发现层后再被核心层兜底拒绝。
+    content: z
+      .string()
+      .trim()
+      .min(1)
+      .describe(
+        "The content to save as a memory (must include non-whitespace characters)",
+      ),
     project: z
       .string()
       .optional()
@@ -452,6 +632,7 @@ COLD START: One initial broad search returning empty is normal for new projects.
     threshold?: number | undefined;
     include_outdated?: boolean | undefined;
     tags?: string[] | undefined;
+    cross_model?: boolean | undefined;
     memory_scope?: ("global" | "project" | "branch") | undefined;
     device_id?: string | undefined;
     git_branch?: string | undefined;
@@ -478,6 +659,11 @@ COLD START: One initial broad search returning empty is normal for new projects.
       .optional()
       .describe("Include outdated memories"),
     tags: z.array(z.string()).optional().describe("Filter by tags"),
+    // [2026-03-14][配置变更] MCP tool schema 同步暴露 cross_model，避免 /mcp 的发现层落后于核心 search 能力 | 影响: registerTools → memory_search / easy_memory_search
+    cross_model: z
+      .boolean()
+      .optional()
+      .describe("Allow searching across mixed embedding models"),
     // v0.7.0: 记忆层级隔离过滤
     memory_scope: z
       .enum(["global", "project", "branch"])
@@ -788,7 +974,7 @@ export async function startMcpShell(container: AppContainer): Promise<void> {
 
   const server = new McpServer({
     name: "easy-memory",
-    version: "0.5.7",
+    version: "0.5.8",
   });
 
   registerTools(server, container, {

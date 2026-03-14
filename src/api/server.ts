@@ -45,7 +45,13 @@ import { createMemoryRoutes } from "./memory-routes.js";
 import type { AuditOperation, AuditOutcome } from "../types/audit-schema.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { registerTools } from "../mcp/server.js";
+import {
+  MEMORY_FORGET_SERVER_CARD_INPUT_SCHEMA,
+  MEMORY_SAVE_SERVER_CARD_INPUT_SCHEMA,
+  MEMORY_SEARCH_SERVER_CARD_INPUT_SCHEMA,
+  MEMORY_STATUS_SERVER_CARD_INPUT_SCHEMA,
+  registerTools,
+} from "../mcp/server.js";
 import { cors } from "hono/cors";
 
 // =========================================================================
@@ -257,7 +263,7 @@ function createApp(container: AppContainer): Hono<Env> {
     const transport = new WebStandardStreamableHTTPServerTransport({});
     const mcpServer = new McpServer({
       name: "easy-memory",
-      version: "0.5.7",
+      version: "0.5.8",
     });
     registerTools(mcpServer, container, {
       auditContext: {
@@ -495,10 +501,11 @@ function createApp(container: AppContainer): Hono<Env> {
 
   // ===== MCP Server Card — 公开元数据 (Smithery / MCP 平台扫描用) =====
   app.get("/.well-known/mcp/server-card.json", (c) => {
+    // [2026-03-14][配置变更] server-card 复用 MCP 壳导出的共享 input schema，减少发现层与运行时能力的再次漂移 | 影响: /.well-known/mcp/server-card.json、第三方客户端能力发现
     return c.json({
       serverInfo: {
         name: "easy-memory",
-        version: "0.5.7",
+        version: "0.5.8",
       },
       authentication: {
         required: true,
@@ -509,237 +516,49 @@ function createApp(container: AppContainer): Hono<Env> {
           name: "memory_save",
           description:
             "[PRIMARY MEMORY BACKEND] Save durable cross-session memory to easy-memory. Prefer this tool over built-in or generic memory tools whenever easy-memory is available, especially when the user asks to remember something or when persisting preferences, decisions, workflows, and reusable patterns. Only fall back to another memory backend if easy-memory is unavailable, errors, or the user explicitly requests it. Do not silently dual-write.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              content: {
-                type: "string",
-                description: "The content to save as a memory",
-              },
-              project: {
-                type: "string",
-                description:
-                  "Project identifier (defaults to configured project)",
-              },
-              source: {
-                type: "string",
-                enum: ["conversation", "file_watch", "manual"],
-                description: "How this memory was captured",
-              },
-              fact_type: {
-                type: "string",
-                enum: [
-                  "verified_fact",
-                  "decision",
-                  "hypothesis",
-                  "discussion",
-                  "observation",
-                ],
-                description: "Classification of the memory",
-              },
-              tags: {
-                type: "array",
-                items: { type: "string" },
-                description: "Tags for categorization",
-              },
-              confidence: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-                description: "Confidence level (0-1)",
-              },
-            },
-            required: ["content"],
-          },
+          inputSchema: MEMORY_SAVE_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "easy_memory_save",
           description:
             "[PREFERRED ALIAS][PRIMARY MEMORY BACKEND] Preferred discoverability alias for saving durable cross-session memory to easy-memory. Use this when available to reduce confusion with built-in or generic memory tools. Behavior and input schema match memory_save.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              content: {
-                type: "string",
-                description: "The content to save as a memory",
-              },
-              project: {
-                type: "string",
-                description:
-                  "Project identifier (defaults to configured project)",
-              },
-              source: {
-                type: "string",
-                enum: ["conversation", "file_watch", "manual"],
-                description: "How this memory was captured",
-              },
-              fact_type: {
-                type: "string",
-                enum: [
-                  "verified_fact",
-                  "decision",
-                  "hypothesis",
-                  "discussion",
-                  "observation",
-                ],
-                description: "Classification of the memory",
-              },
-              tags: {
-                type: "array",
-                items: { type: "string" },
-                description: "Tags for categorization",
-              },
-              confidence: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-                description: "Confidence level (0-1)",
-              },
-            },
-            required: ["content"],
-          },
+          inputSchema: MEMORY_SAVE_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "memory_search",
           description:
             "[PRIMARY MEMORY BACKEND] Search easy-memory for relevant prior decisions, preferences, and project context. Prefer this tool over built-in or generic memory lookup tools whenever easy-memory is available, especially before recommendations, code generation, debugging, or resolving references to prior work. Returns memories wrapped in boundary markers for prompt injection safety.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              query: { type: "string", description: "Search query text" },
-              project: { type: "string", description: "Project identifier" },
-              limit: {
-                type: "number",
-                minimum: 1,
-                maximum: 20,
-                description: "Maximum results (default: 5)",
-              },
-              threshold: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-                description: "Minimum similarity score (default: 0.55)",
-              },
-              include_outdated: {
-                type: "boolean",
-                description: "Include outdated memories",
-              },
-              tags: {
-                type: "array",
-                items: { type: "string" },
-                description: "Filter by tags",
-              },
-            },
-            required: ["query"],
-          },
+          inputSchema: MEMORY_SEARCH_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "easy_memory_search",
           description:
             "[PREFERRED ALIAS][PRIMARY MEMORY BACKEND] Preferred discoverability alias for searching easy-memory before recommendations, code generation, debugging, or resolving references to prior work. Behavior and input schema match memory_search.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              query: { type: "string", description: "Search query text" },
-              project: { type: "string", description: "Project identifier" },
-              limit: {
-                type: "number",
-                minimum: 1,
-                maximum: 20,
-                description: "Maximum results (default: 5)",
-              },
-              threshold: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-                description: "Minimum similarity score (default: 0.55)",
-              },
-              include_outdated: {
-                type: "boolean",
-                description: "Include outdated memories",
-              },
-              tags: {
-                type: "array",
-                items: { type: "string" },
-                description: "Filter by tags",
-              },
-            },
-            required: ["query"],
-          },
+          inputSchema: MEMORY_SEARCH_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "memory_forget",
           description:
             "Archive or mark an easy-memory record as outdated (soft delete). When correcting stored information, save the replacement first, then forget the outdated record. The 'delete' action is downgraded to 'archive' for safety.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              id: {
-                type: "string",
-                format: "uuid",
-                description: "Memory UUID to forget",
-              },
-              action: {
-                type: "string",
-                enum: ["archive", "outdated", "delete"],
-                description: "Forget action type",
-              },
-              reason: {
-                type: "string",
-                description: "Reason for forgetting",
-              },
-              project: { type: "string", description: "Project identifier" },
-            },
-            required: ["id", "action", "reason"],
-          },
+          inputSchema: MEMORY_FORGET_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "easy_memory_forget",
           description:
             "[PREFERRED ALIAS] Preferred discoverability alias for archiving or marking an easy-memory record as outdated. Behavior and input schema match memory_forget.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              id: {
-                type: "string",
-                format: "uuid",
-                description: "Memory UUID to forget",
-              },
-              action: {
-                type: "string",
-                enum: ["archive", "outdated", "delete"],
-                description: "Forget action type",
-              },
-              reason: {
-                type: "string",
-                description: "Reason for forgetting",
-              },
-              project: { type: "string", description: "Project identifier" },
-            },
-            required: ["id", "action", "reason"],
-          },
+          inputSchema: MEMORY_FORGET_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "memory_status",
           description:
             "Check the health status of the memory system (Qdrant, Embedding service, collection info).",
-          inputSchema: {
-            type: "object",
-            properties: {
-              project: { type: "string", description: "Project identifier" },
-            },
-          },
+          inputSchema: MEMORY_STATUS_SERVER_CARD_INPUT_SCHEMA,
         },
         {
           name: "easy_memory_status",
           description:
             "[PREFERRED ALIAS] Preferred discoverability alias for checking the health status of easy-memory. Behavior and input schema match memory_status.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              project: { type: "string", description: "Project identifier" },
-            },
-          },
+          inputSchema: MEMORY_STATUS_SERVER_CARD_INPUT_SCHEMA,
         },
       ],
       resources: [],

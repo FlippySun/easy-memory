@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![smithery badge](https://smithery.ai/badge/FlippySun/easy-memory)](https://smithery.ai/servers/FlippySun/easy-memory)
 
-> **让 AI 跨会话、跨项目持久化记忆。** 基于 Qdrant 向量数据库 + Ollama/Gemini Embedding 的 MCP 记忆服务。
+> **让 AI 跨会话、跨项目持久化记忆。** 基于 Qdrant 向量数据库 + 官方向量模型（支持经 OpenAI-compatible relay 接入）/ Ollama 的 MCP 记忆服务。
 
 Easy Memory 提供双 Shell 架构：
 
@@ -89,19 +89,38 @@ curl http://localhost:11434/api/tags
 > - bge-m3 模型首次加载约需 2GB 内存，低配机器可能较慢
 > - Ollama 默认监听 `0.0.0.0:11434`，生产环境建议限制到 `127.0.0.1`
 
-### 可选：配置 Google Gemini 远端 Embedding
+### 默认远端方案：官方 OpenAI 向量模型（经第三方 relay 接入）
 
-如果你需要更高质量的向量或本地资源不足，可以启用 Gemini Embedding（Google Cloud Vertex AI）：
+如果你需要更高质量的向量或本地资源不足，项目默认推荐启用 **官方 OpenAI 向量模型**，但通过兼容 relay 服务接入：
+
+1. 准备支持 `/v1/embeddings` 的兼容服务与 API Key
+2. 使用 `.env.example` 中的 `OPENAI_EMBEDDING_*` 配置项
+3. 设置环境变量：
+
+```bash
+EMBEDDING_PROVIDER=openai-auto
+OPENAI_EMBEDDING_API_KEY=sk-...
+OPENAI_EMBEDDING_BASE_URL=https://api.vectorengine.ai/v1
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+> `openai-auto` 模式下，远端官方 OpenAI 向量模型（经 relay 接入）优先，Ollama 自动兜底。
+>
+> easy-memory 会自动发送 `dimensions=1024`，确保与当前 Qdrant dense vector collection 保持一致。
+
+### 兼容：配置 Google 官方 Gemini 远端 Embedding
+
+如果你更偏好 Google 官方 Vertex AI，也仍然可以继续使用 Gemini Embedding：
 
 1. 前往 [Google AI Studio](https://aistudio.google.com/apikey) 获取 API Key
 2. 在 [Google Cloud Console](https://console.cloud.google.com/) 创建项目并启用 `aiplatform.googleapis.com`
 3. 设置环境变量：
 
 ```bash
-EMBEDDING_PROVIDER=auto    # auto = Gemini 优先，Ollama 自动兜底
-GEMINI_API_KEY=AIzaSy...   # Google AI Studio API Key
-GEMINI_PROJECT_ID=my-gcp-project  # Google Cloud Project ID
-GEMINI_REGION=us-central1  # 可选，默认 us-central1
+EMBEDDING_PROVIDER=auto
+GEMINI_API_KEY=AIzaSy...
+GEMINI_PROJECT_ID=my-gcp-project
+GEMINI_REGION=us-central1
 ```
 
 > `auto` 模式下，Gemini 请求失败（限流/超时）会自动降级到 Ollama，确保服务不中断。
@@ -119,7 +138,7 @@ npx easy-memory
 
 ```bash
 git clone https://github.com/FlippySun/easy-memory.git && cd easy-memory
-cp .env.example .env   # 编辑配置
+cp .env.example .env   # 默认即本地 Ollama；如需远端 relay，再改成 EMBEDDING_PROVIDER=openai-auto 并填写 OPENAI_EMBEDDING_API_KEY
 docker compose up -d
 docker exec ollama ollama pull bge-m3
 ```
@@ -338,23 +357,22 @@ curl -X POST http://localhost:3080/api/save \
   -H "Content-Type: application/json" \
   -d '{
     "content": "项目使用 pnpm 作为包管理器",
-    "metadata": {
-      "category": "convention",
-      "tags": ["tooling", "pnpm"]
-    }
+    "source": "manual",
+    "fact_type": "decision",
+    "tags": ["tooling", "pnpm"]
   }'
 ```
 
 **请求字段：**
 
-| 字段         | 类型       | 必填 | 说明                                                                                      |
-| ------------ | ---------- | ---- | ----------------------------------------------------------------------------------------- |
-| `content`    | `string`   | ✅   | 记忆内容                                                                                  |
-| `project`    | `string`   | ❌   | 项目标识（默认 `default`）                                                                |
-| `source`     | `string`   | ❌   | 来源：`conversation` / `code_context` / `tool_output` / `documentation` / `user_feedback` |
-| `fact_type`  | `string`   | ❌   | 类型：`observation` / `decision` / `preference` / `convention` / `dependency`             |
-| `tags`       | `string[]` | ❌   | 标签列表                                                                                  |
-| `confidence` | `number`   | ❌   | 置信度 0-1（默认 0.7）                                                                    |
+| 字段         | 类型       | 必填 | 说明                                                                             |
+| ------------ | ---------- | ---- | -------------------------------------------------------------------------------- |
+| `content`    | `string`   | ✅   | 记忆内容                                                                         |
+| `project`    | `string`   | ❌   | 项目标识（默认 `default`）                                                       |
+| `source`     | `string`   | ❌   | 来源：`conversation` / `file_watch` / `manual`                                   |
+| `fact_type`  | `string`   | ❌   | 类型：`verified_fact` / `decision` / `hypothesis` / `discussion` / `observation` |
+| `tags`       | `string[]` | ❌   | 标签列表                                                                         |
+| `confidence` | `number`   | ❌   | 置信度 0-1（默认 0.7）                                                           |
 
 ### `POST /api/search`
 
@@ -369,14 +387,15 @@ curl -X POST http://localhost:3080/api/search \
 
 **请求字段：**
 
-| 字段               | 类型       | 必填 | 说明                       |
-| ------------------ | ---------- | ---- | -------------------------- |
-| `query`            | `string`   | ✅   | 搜索查询                   |
-| `project`          | `string`   | ❌   | 项目标识                   |
-| `limit`            | `number`   | ❌   | 返回数量 1-20（默认 5）    |
-| `threshold`        | `number`   | ❌   | 相似度阈值 0-1（默认 0.3） |
-| `include_outdated` | `boolean`  | ❌   | 是否包含已归档记忆         |
-| `tags`             | `string[]` | ❌   | 按标签过滤                 |
+| 字段               | 类型       | 必填 | 说明                                                             |
+| ------------------ | ---------- | ---- | ---------------------------------------------------------------- |
+| `query`            | `string`   | ✅   | 搜索查询                                                         |
+| `project`          | `string`   | ❌   | 项目标识                                                         |
+| `limit`            | `number`   | ❌   | 返回数量 1-20（默认 5）                                          |
+| `threshold`        | `number`   | ❌   | 相似度阈值 0-1（默认 0.55）                                      |
+| `include_outdated` | `boolean`  | ❌   | 是否包含已归档记忆                                               |
+| `cross_model`      | `boolean`  | ❌   | 是否允许跨模型搜索（默认关闭，排查 fallback / 迁移时可显式开启） |
+| `tags`             | `string[]` | ❌   | 按标签过滤                                                       |
 
 ### `POST /api/forget`
 
@@ -459,7 +478,7 @@ curl http://your-server:3080/health
 ```bash
 docker pull thj8632/easy-memory:latest
 # 或指定版本
-docker pull thj8632/easy-memory:0.5.7
+docker pull thj8632/easy-memory:0.5.8
 ```
 
 支持平台：`linux/amd64`, `linux/arm64`
@@ -638,34 +657,41 @@ Authorization: Bearer <ADMIN_TOKEN>
 
 ## 环境变量
 
-| 变量                    | 默认值                   | 说明                                                       |
-| ----------------------- | ------------------------ | ---------------------------------------------------------- |
-| `EASY_MEMORY_MODE`      | `mcp`                    | 运行模式：`mcp` / `http`                                   |
-| `QDRANT_URL`            | `http://localhost:6333`  | Qdrant 连接地址                                            |
-| `QDRANT_API_KEY`        | `easy-memory-dev`        | Qdrant API Key                                             |
-| `EMBEDDING_PROVIDER`    | `ollama`                 | Embedding 引擎：`ollama` / `gemini` / `auto`               |
-| `OLLAMA_BASE_URL`       | `http://localhost:11434` | Ollama 地址                                                |
-| `OLLAMA_MODEL`          | `bge-m3`                 | Ollama 模型名（1024 维）                                   |
-| `OLLAMA_TIMEOUT_MS`     | `120000`                 | Ollama 请求超时（ms），首次加载模型需较长时间              |
-| `GEMINI_API_KEY`        | —                        | Google Cloud Vertex AI API Key（`gemini`/`auto` 模式必填） |
-| `GEMINI_PROJECT_ID`     | —                        | Google Cloud Project ID（`gemini`/`auto` 模式必填）        |
-| `GEMINI_REGION`         | `us-central1`            | Google Cloud Vertex AI 区域                                |
-| `GEMINI_MODEL`          | `gemini-embedding-001`   | Gemini Embedding 模型                                      |
-| `DEFAULT_PROJECT`       | `default`                | 默认项目标识                                               |
-| `HTTP_PORT`             | `3080`                   | HTTP Shell 监听端口                                        |
-| `HTTP_HOST`             | `127.0.0.1`              | HTTP Shell 监听地址                                        |
-| `HTTP_AUTH_TOKEN`       | —                        | HTTP API Bearer Token                                      |
-| `TRUST_PROXY`           | `false`                  | 信任反向代理 X-Forwarded-\* 头                             |
-| `REQUIRE_TLS`           | `false`                  | 拒绝非 HTTPS 请求（需 TRUST_PROXY=true）                   |
-| `ADMIN_TOKEN`           | —                        | Admin API Token（留空则禁用管理后台）                      |
-| `ADMIN_USERNAME`        | —                        | Admin 用户名 — 首次启动时自动创建管理员账户                |
-| `ADMIN_PASSWORD`        | —                        | Admin 密码 — 与 ADMIN_USERNAME 配合使用                    |
-| `DATA_DIR`              | `$HOME`                  | 数据文件存储目录（Docker 中设为 `/data` 并挂载 Volume）    |
-| `RATE_LIMIT_PER_MINUTE` | `60`                     | 全局速率限制（次/分钟）                                    |
-| `GEMINI_MAX_PER_HOUR`   | `200`                    | Gemini 每小时最大调用数                                    |
-| `GEMINI_MAX_PER_DAY`    | `2000`                   | Gemini 每日最大调用数                                      |
-| `EASY_MEMORY_TOKEN`     | —                        | 远程代理模式：API Key（设置后启用远程代理，跳过本地服务）  |
-| `EASY_MEMORY_URL`       | —                        | 远程代理模式：远端 Easy Memory 服务 URL                    |
+> `.env.example` 是当前仓库对外公开的**权威配置模板**。
+>
+> 新增配置项会优先落在 `.env.example`，再同步到本表和部署示例。
+
+| 变量                        | 默认值                           | 说明                                                                                                                                       |
+| --------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `EASY_MEMORY_MODE`          | `mcp`                            | 运行模式：`mcp` / `http`                                                                                                                   |
+| `QDRANT_URL`                | `http://localhost:6333`          | Qdrant 连接地址                                                                                                                            |
+| `QDRANT_API_KEY`            | `easy-memory-dev`                | Qdrant API Key                                                                                                                             |
+| `EMBEDDING_PROVIDER`        | `ollama`                         | Embedding 引擎：`ollama` / `gemini` / `openai` / `auto` / `openai-auto`；自托管默认走本地 Ollama，如需推荐远端方案请显式设置 `openai-auto` |
+| `OLLAMA_BASE_URL`           | `http://localhost:11434`         | Ollama 地址                                                                                                                                |
+| `OLLAMA_MODEL`              | `bge-m3`                         | Ollama 模型名（1024 维）                                                                                                                   |
+| `OLLAMA_TIMEOUT_MS`         | `120000`                         | Ollama 请求超时（ms），首次加载模型需较长时间                                                                                              |
+| `OPENAI_EMBEDDING_API_KEY`  | —                                | 官方 OpenAI 向量模型 relay 的 API Key（`openai`/`openai-auto` 模式必填）                                                                   |
+| `OPENAI_EMBEDDING_BASE_URL` | `https://api.vectorengine.ai/v1` | relay base URL 或完整 `/embeddings` 端点                                                                                                   |
+| `OPENAI_EMBEDDING_MODEL`    | `text-embedding-3-small`         | 默认官方向量模型名（请求时自动带 `dimensions=1024`）                                                                                       |
+| `GEMINI_API_KEY`            | —                                | Google Cloud Vertex AI API Key（`gemini`/`auto` 模式必填）                                                                                 |
+| `GEMINI_PROJECT_ID`         | —                                | Google Cloud Project ID（`gemini`/`auto` 模式必填）                                                                                        |
+| `GEMINI_REGION`             | `us-central1`                    | Google Cloud Vertex AI 区域                                                                                                                |
+| `GEMINI_MODEL`              | `gemini-embedding-001`           | Gemini Embedding 模型                                                                                                                      |
+| `DEFAULT_PROJECT`           | `default`                        | 默认项目标识                                                                                                                               |
+| `HTTP_PORT`                 | `3080`                           | HTTP Shell 监听端口                                                                                                                        |
+| `HTTP_HOST`                 | `127.0.0.1`                      | HTTP Shell 监听地址                                                                                                                        |
+| `HTTP_AUTH_TOKEN`           | —                                | HTTP API Bearer Token                                                                                                                      |
+| `TRUST_PROXY`               | `false`                          | 信任反向代理 X-Forwarded-\* 头                                                                                                             |
+| `REQUIRE_TLS`               | `false`                          | 拒绝非 HTTPS 请求（需 TRUST_PROXY=true）                                                                                                   |
+| `ADMIN_TOKEN`               | —                                | Admin API Token（留空则禁用管理后台）                                                                                                      |
+| `ADMIN_USERNAME`            | —                                | Admin 用户名 — 首次启动时自动创建管理员账户                                                                                                |
+| `ADMIN_PASSWORD`            | —                                | Admin 密码 — 与 ADMIN_USERNAME 配合使用                                                                                                    |
+| `DATA_DIR`                  | `$HOME`                          | 数据文件存储目录（Docker 中设为 `/data` 并挂载 Volume）                                                                                    |
+| `RATE_LIMIT_PER_MINUTE`     | `60`                             | 全局速率限制（次/分钟）                                                                                                                    |
+| `GEMINI_MAX_PER_HOUR`       | `200`                            | Gemini 每小时最大调用数                                                                                                                    |
+| `GEMINI_MAX_PER_DAY`        | `2000`                           | Gemini 每日最大调用数                                                                                                                      |
+| `EASY_MEMORY_TOKEN`         | —                                | 远程代理模式：API Key（设置后启用远程代理，跳过本地服务）                                                                                  |
+| `EASY_MEMORY_URL`           | —                                | 远程代理模式：远端 Easy Memory 服务 URL                                                                                                    |
 
 ---
 
@@ -691,7 +717,7 @@ GEMINI_PROJECT_ID=my-gcp-project   # ⬅️ 新增必填
 GEMINI_REGION=us-central1          # 可选，默认 us-central1
 ```
 
-> **纯 Ollama 用户不受影响**（`EMBEDDING_PROVIDER=ollama` 为默认值）。
+> **纯 Ollama 用户仍可继续使用**（显式设置 `EMBEDDING_PROVIDER=ollama` 即可）。
 
 ---
 

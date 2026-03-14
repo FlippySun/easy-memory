@@ -73,27 +73,34 @@ tests/
 
 ## Test Types
 
-| Type | Location | Run Command | Timeout |
-|------|----------|-------------|---------|
-| Unit | `tests/**/*.test.ts` (excluding e2e) | `pnpm test` | 10s |
-| E2E (basic) | `tests/e2e.test.ts` | `pnpm test:e2e` | 60s |
-| E2E (dual engine) | `tests/e2e-dual-engine.test.ts` | `pnpm test:e2e:dual` | 180s |
-| Typecheck | All `src/**/*.ts` | `pnpm typecheck` | — |
+| Type              | Location                             | Run Command          | Timeout |
+| ----------------- | ------------------------------------ | -------------------- | ------- |
+| Unit              | `tests/**/*.test.ts` (excluding e2e) | `pnpm test`          | 10s     |
+| E2E (basic)       | `tests/e2e.test.ts`                  | `pnpm test:e2e`      | 60s     |
+| E2E (dual engine) | `tests/e2e-dual-engine.test.ts`      | `pnpm test:e2e:dual` | 180s    |
+| Typecheck         | All `src/**/*.ts`                    | `pnpm typecheck`     | —       |
 
 ### Unit Tests
+
 - Isolated from external services (Qdrant, Ollama, Gemini)
 - All external dependencies mocked via `vi.fn()` / `vi.mock()`
 - Focus on behavior: input → output, error paths, edge cases
 
 ### E2E Tests
+
 - Require live Qdrant (localhost:6333) and Ollama (localhost:11434) with `bge-m3` model
 - Test full CRUD lifecycle: save → search → forget → search (verify recall fails)
 - Include graceful dependency detection — skip (not fail) if services are unavailable:
+
 ```typescript
 async function checkDependencies(): Promise<boolean> {
   const [qdrantOK, ollamaOK] = await Promise.all([
-    fetch(`${QDRANT_URL}/healthz`).then((r) => r.ok).catch(() => false),
-    fetch(`${OLLAMA_URL}/api/tags`).then((r) => r.ok).catch(() => false),
+    fetch(`${QDRANT_URL}/healthz`)
+      .then((r) => r.ok)
+      .catch(() => false),
+    fetch(`${OLLAMA_URL}/api/tags`)
+      .then((r) => r.ok)
+      .catch(() => false),
   ]);
   return qdrantOK && ollamaOK;
 }
@@ -158,7 +165,9 @@ const mockClient = {
 
 vi.mock("@qdrant/js-client-rest", () => {
   return {
-    QdrantClient: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    QdrantClient: vi.fn().mockImplementation(function (
+      this: Record<string, unknown>,
+    ) {
       Object.assign(this, mockClient);
     }),
   };
@@ -171,10 +180,12 @@ Used to intercept `process.stderr.write`, `process.exit`, etc.
 
 ```typescript
 // tests/utils/logger.test.ts
-vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
-  writtenChunks.push(chunk.toString());
-  return true;
-});
+vi.spyOn(process.stderr, "write").mockImplementation(
+  (chunk: string | Uint8Array) => {
+    writtenChunks.push(chunk.toString());
+    return true;
+  },
+);
 ```
 
 ### Pattern 4: Hono Test Client (HTTP Route Tests)
@@ -214,6 +225,7 @@ function createMockContainer(overrides: Partial<AppConfig> = {}): AppContainer {
 ### Type Casting Note
 
 Mocks frequently use `as unknown as T` or `as any` cast to satisfy TypeScript when only a subset of interface methods are mocked:
+
 ```typescript
 } as unknown as SaveHandlerDeps["qdrant"],
 ```
@@ -232,6 +244,7 @@ Mocks frequently use `as unknown as T` or `as any` cast to satisfy TypeScript wh
 ## Test File Structure
 
 Every test file follows this pattern:
+
 1. **Module-level JSDoc** — `@module` + `@description`
 2. **Imports** — vitest globals + source module under test
 3. **Mock setup** (if needed) — mock factories or `vi.mock()`
@@ -337,6 +350,7 @@ pnpm test -- --coverage
 ## Test Configuration Details
 
 ### Unit test config (`vitest.config.ts`)
+
 ```typescript
 export default defineConfig({
   test: {
@@ -354,6 +368,7 @@ export default defineConfig({
 ```
 
 ### E2E config (`vitest.e2e.config.ts`)
+
 ```typescript
 export default defineConfig({
   test: {
@@ -366,6 +381,7 @@ export default defineConfig({
 ```
 
 ### E2E dual-engine config (`vitest.e2e-dual.config.ts`)
+
 ```typescript
 export default defineConfig({
   test: {
@@ -383,18 +399,20 @@ export default defineConfig({
 ### State Cleanup Between Tests
 
 Tool handlers with internal caches expose cleanup functions for tests:
+
 ```typescript
 // src/tools/save.ts exports clearHashCache()
 // tests/tools/save.test.ts
 beforeEach(() => {
   deps = createMockDeps();
-  clearHashCache();  // Reset in-memory dedup hash set
+  clearHashCache(); // Reset in-memory dedup hash set
 });
 ```
 
 ### Graceful E2E Skip
 
 E2E tests detect whether external services are available and skip gracefully if not:
+
 ```typescript
 it.skipIf(!servicesAvailable)("should save a memory", async () => { ... });
 ```
@@ -405,4 +423,4 @@ There is no shared fixtures directory. Test data is defined inline within each t
 
 ---
 
-*Testing analysis: 2026-03-14*
+_Testing analysis: 2026-03-14_

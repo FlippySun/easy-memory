@@ -8,6 +8,7 @@ import {
   validateVector,
   OllamaEmbeddingProvider,
   GeminiEmbeddingProvider,
+  OpenAICompatibleEmbeddingProvider,
   NonRetryableError,
 } from "../../src/services/embedding-providers.js";
 
@@ -306,7 +307,7 @@ describe("OllamaEmbeddingProvider", () => {
       expect(await provider.healthCheck()).toBe(false);
     });
 
-    it("should still pass healthCheck if probe request fails (graceful degradation)", async () => {
+    it("should return false if probe request fails", async () => {
       let callIndex = 0;
       globalThis.fetch = vi.fn().mockImplementation(async () => {
         callIndex++;
@@ -317,8 +318,7 @@ describe("OllamaEmbeddingProvider", () => {
         throw new Error("model not found");
       });
       const provider = new OllamaEmbeddingProvider();
-      // Should still return true — probe failure is non-fatal
-      expect(await provider.healthCheck()).toBe(true);
+      expect(await provider.healthCheck()).toBe(false);
     });
 
     it("should abort healthCheck when close() is called during check", async () => {
@@ -548,12 +548,31 @@ describe("GeminiEmbeddingProvider", () => {
 
   describe("healthCheck", () => {
     it("should return true when Gemini is reachable", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({ ok: true });
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          predictions: [{ embeddings: { values: new Array(1024).fill(0.1) } }],
+        }),
+      });
       const provider = new GeminiEmbeddingProvider({
         apiKey: "k",
         projectId: "p",
       });
       expect(await provider.healthCheck()).toBe(true);
+    });
+
+    it("should return false when Gemini healthCheck returns wrong dimension", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          predictions: [{ embeddings: { values: new Array(768).fill(0.1) } }],
+        }),
+      });
+      const provider = new GeminiEmbeddingProvider({
+        apiKey: "k",
+        projectId: "p",
+      });
+      expect(await provider.healthCheck()).toBe(false);
     });
 
     it("should return false when Gemini is unreachable", async () => {
@@ -588,6 +607,144 @@ describe("GeminiEmbeddingProvider", () => {
       provider.close();
       expect(await healthPromise).toBe(false);
     });
+  });
+});
+
+// =========================================================================
+// OpenAICompatibleEmbeddingProvider
+// =========================================================================
+
+describe("OpenAICompatibleEmbeddingProvider", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    globalThis.fetch = originalFetch;
+  });
+
+  it("should throw if API key is missing", () => {
+    expect(() => new OpenAICompatibleEmbeddingProvider({ apiKey: "" })).toThrow(
+      "API key is required",
+    );
+  });
+
+  it("should create with default config", () => {
+    const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "test" });
+    expect(provider.name).toBe("openai");
+    expect(provider.modelName).toBe("text-embedding-3-small");
+    expect(provider.dimension).toBe(1024);
+  });
+
+  it("should normalize host-only baseUrl to /v1/embeddings", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: new Array(1024).fill(0.2) }],
+      }),
+    });
+    globalThis.fetch = mockFetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      apiKey: "test-key",
+      baseUrl: "https://proxy.example.com",
+      model: "text-embedding-3-small",
+    });
+    await provider.embed("hello openai-compatible");
+
+    const [url, options] = mockFetch.mock.calls[0]!;
+    expect(url).toBe("https://proxy.example.com/v1/embeddings");
+    expect(options.headers.Authorization).toBe("Bearer test-key");
+    expect(JSON.parse(options.body as string)).toEqual({
+      model: "text-embedding-3-small",
+      input: "hello openai-compatible",
+      dimensions: 1024,
+      encoding_format: "float",
+    });
+  });
+
+  it("should preserve full /v1/embeddings endpoint without double-appending", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: new Array(1024).fill(0.2) }],
+      }),
+    });
+    globalThis.fetch = mockFetch;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      apiKey: "test-key",
+      baseUrl: "https://proxy.example.com/v1/embeddings",
+    });
+    await provider.embed("hello full endpoint");
+
+    const [url] = mockFetch.mock.calls[0]!;
+    expect(url).toBe("https://proxy.example.com/v1/embeddings");
+  });
+
+  it("should return embedding vector on success", async () => {
+    const expectedVector = new Array(1024).fill(0.4);
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: expectedVector }],
+      }),
+    });
+
+    const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "k" });
+    const result = await provider.embed("test");
+    expect(result).toEqual(expectedVector);
+    expect(result).toHaveLength(1024);
+  });
+
+  it("should throw NonRetryableError on 429 quota exhaustion without retrying", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+      text: async () =>
+        JSON.stringify({
+          error: {
+            type: "insufficient_quota",
+            message: "quota exceeded",
+          },
+        }),
+    });
+    globalThis.fetch = fetchSpy;
+
+    const provider = new OpenAICompatibleEmbeddingProvider({
+      apiKey: "k",
+      maxRetries: 3,
+    });
+
+    await expect(provider.embed("test")).rejects.toThrow(NonRetryableError);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("should return true when healthCheck endpoint is reachable", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: new Array(1024).fill(0.1) }],
+      }),
+    });
+    const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "k" });
+    expect(await provider.healthCheck()).toBe(true);
+  });
+
+  it("should return false when healthCheck endpoint returns wrong dimension", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: new Array(1536).fill(0.1) }],
+      }),
+    });
+    const provider = new OpenAICompatibleEmbeddingProvider({ apiKey: "k" });
+    expect(await provider.healthCheck()).toBe(false);
   });
 });
 

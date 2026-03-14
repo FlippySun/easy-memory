@@ -2,9 +2,10 @@
  * @module embedding-providers
  * @description Embedding Provider 策略模式实现。
  *
- * 提供两种 Provider:
+ * 提供三种 Provider:
  * - OllamaEmbeddingProvider: 本地 Ollama (bge-m3, 1024 维)
  * - GeminiEmbeddingProvider: 远端 Google Cloud Vertex AI (gemini-embedding-001, MRL 1024 维)
+ * - OpenAICompatibleEmbeddingProvider: OpenAI-compatible / 第三方中转向量服务 (固定请求 1024 维)
  *
  * 共同职责:
  * - 超时控制 (AbortController)
@@ -386,9 +387,14 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
       });
       if (!response.ok) return false;
 
-      // [FIX C-3]: 维度探测 — 发送一个短文本获取实际维度
-      // 避免运行时 embed 5 次重试后才发现维度不匹配
-      // 使用独立的 AbortController + 3s timeout，防止 /api/tags 耗尽共享超时
+      // ========================== 变更记录 ==========================
+      // [日期]     2026-03-14
+      // [类型]     修复Bug
+      // [描述]     Ollama healthCheck 现在把 embedding probe 视为必需校验，确保 status 只在模型真实可嵌入且维度匹配时返回 ready。
+      // [思路]     仅 `/api/tags` 可达不足以证明 embedding 真可用；之前 probe 失败会放过，导致“status 健康但首次 save/search 才失败”的假阳性。
+      // [影响范围] memory_status、HTTP `/api/status`、运维排障体验。
+      // [潜在风险] 模型首次预热时 status 可能更保守地显示不可用，但这比误报 ready 更安全。
+      // ==============================================================
       try {
         const probeController = new AbortController();
         this._activeControllers.add(probeController);
@@ -403,30 +409,35 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
             }),
             signal: probeController.signal,
           });
-          if (probeResponse.ok) {
-            const data = (await probeResponse.json()) as {
-              embedding?: number[];
-            };
-            if (Array.isArray(data.embedding) && data.embedding.length > 0) {
-              if (data.embedding.length !== this.dimension) {
-                log.error(
-                  `Ollama ${this.modelName} dimension mismatch: actual=${data.embedding.length}, expected=${this.dimension}. ` +
-                    `Check Ollama model version or set OLLAMA_DIMENSION env var.`,
-                );
-                return false;
-              }
-              log.info(
-                `Ollama ${this.modelName} dimension verified: ${data.embedding.length}d`,
-              );
-            }
+          if (!probeResponse.ok) {
+            return false;
           }
+
+          const data = (await probeResponse.json()) as {
+            embedding?: number[];
+          };
+          if (!Array.isArray(data.embedding) || data.embedding.length === 0) {
+            return false;
+          }
+          if (data.embedding.length !== this.dimension) {
+            log.error(
+              `Ollama ${this.modelName} dimension mismatch: actual=${data.embedding.length}, expected=${this.dimension}. ` +
+                `Check Ollama model version or set OLLAMA_DIMENSION env var.`,
+            );
+            return false;
+          }
+          log.info(
+            `Ollama ${this.modelName} dimension verified: ${data.embedding.length}d`,
+          );
         } finally {
           clearTimeout(probeTimeout);
           this._activeControllers.delete(probeController);
         }
       } catch {
-        // 探测失败不阻断 healthCheck — 将在首次 embed 时由 validateVector 捕获
-        log.warn("Ollama dimension probe failed, will validate on first embed");
+        log.warn(
+          "Ollama dimension probe failed, treating provider as unavailable",
+        );
+        return false;
       }
 
       return true;
@@ -613,7 +624,23 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
           parameters: { outputDimensionality: this.outputDimensionality },
         }),
       });
-      return response.ok;
+      if (!response.ok) {
+        return false;
+      }
+
+      const data = (await response.json()) as VertexAIEmbeddingResponse;
+      const values = data.predictions?.[0]?.embeddings?.values;
+      if (!Array.isArray(values) || values.length === 0) {
+        return false;
+      }
+      if (values.length !== this.dimension) {
+        log.error(
+          `Gemini ${this.modelName} dimension mismatch during healthCheck: actual=${values.length}, expected=${this.dimension}`,
+        );
+        return false;
+      }
+
+      return true;
     } catch {
       // [FIX H-4]: 静默处理 — 不记录错误详情，防止 API Key/projectId 泄露到堆栈
       return false;
@@ -621,5 +648,219 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
       clearTimeout(timeout);
       this._activeControllers.delete(controller);
     }
+  }
+}
+
+// =========================================================================
+// OpenAI-compatible Provider
+// =========================================================================
+
+export interface OpenAICompatibleProviderConfig extends BaseProviderConfig {
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+interface OpenAICompatibleEmbeddingResponse {
+  data?: Array<{
+    embedding?: number[];
+  }>;
+}
+
+/**
+ * ========================== 变更记录 ==========================
+ * [日期]     2026-03-14
+ * [类型]     新增功能
+ * [描述]     新增 OpenAI-compatible 向量 Provider，允许接入第三方中转服务，并固定输出 1024 维向量以兼容现有 Qdrant collection。
+ * [思路]     复用现有 BaseEmbeddingProvider 的超时、重试、向量校验与关闭语义；对外仅暴露 baseUrl/model/apiKey 三个必要参数，内部自动标准化到 /v1/embeddings。
+ * [影响范围] EmbeddingService、container.ts 配置解析、README/.env.example 文档模板、基于远端 embedding 的 save/search 全链路。
+ * [潜在风险] 若用户配置的第三方服务不支持 OpenAI-compatible /embeddings 或不支持 1024 维降维，请求会在 Provider 层快速失败并提示配置问题。
+ * ==============================================================
+ */
+/**
+ * OpenAI-compatible Embedding Provider — 适配 OpenAI 协议兼容的 embedding 端点。
+ *
+ * 兼容目标:
+ * - OpenAI 官方 `/v1/embeddings`
+ * - one-api/new-api 等第三方中转服务
+ * - 任意 Bearer Token + JSON body 语义兼容的 embedding 网关
+ *
+ * 维度策略:
+ * - 当前 easy-memory 的 dense vector collection 固定为 1024 维
+ * - Provider 会始终发送 `dimensions: 1024`，避免写入 Qdrant 时发生维度漂移
+ */
+export class OpenAICompatibleEmbeddingProvider extends BaseEmbeddingProvider {
+  readonly name = "openai";
+  readonly modelName: string;
+  readonly dimension = 1024;
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+
+  constructor(config: OpenAICompatibleProviderConfig) {
+    super({
+      timeoutMs: config.timeoutMs ?? 30_000,
+      maxRetries: config.maxRetries ?? 3,
+      ...(config.isCircuitOpen ? { isCircuitOpen: config.isCircuitOpen } : {}),
+    });
+
+    if (!config.apiKey) {
+      throw new Error("OpenAI-compatible API key is required");
+    }
+
+    this.apiKey = config.apiKey;
+    this.baseUrl = (config.baseUrl ?? "https://api.vectorengine.ai/v1").replace(
+      /\/+$/,
+      "",
+    );
+    this.modelName = config.model ?? "text-embedding-3-small";
+  }
+
+  /**
+   * 远端兼容端点与 Gemini 类似，采用更保守的指数退避 (2s, 4s, 8s...) + jitter。
+   */
+  protected getRetryDelay(attempt: number): number {
+    const baseDelay = Math.pow(2, attempt - 1) * 2000;
+    return Math.round(baseDelay * (0.8 + Math.random() * 0.4));
+  }
+
+  protected async doFetch(
+    text: string,
+    signal: AbortSignal,
+  ): Promise<number[]> {
+    const response = await fetch(this.getEmbeddingsUrl(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: this.modelName,
+        input: text,
+        dimensions: this.dimension,
+        encoding_format: "float",
+      }),
+      signal,
+    });
+
+    if (response.status === 429) {
+      let isQuotaExhausted = false;
+      try {
+        const errorBody = await response.text();
+        isQuotaExhausted =
+          /insufficient_quota|quota|billing|exhausted|resource_exhausted/i.test(
+            errorBody,
+          );
+      } catch {
+        /* body 读取失败不影响主流程 */
+      }
+
+      if (isQuotaExhausted) {
+        throw new NonRetryableError(
+          "OpenAI-compatible embedding quota exhausted (429)",
+          429,
+        );
+      }
+
+      throw new Error("OpenAI-compatible embedding rate limited (429)");
+    }
+
+    if (!response.ok) {
+      try {
+        await response.text();
+      } catch {
+        /* body 读取失败不影响主流程 */
+      }
+
+      if (
+        response.status >= 400 &&
+        response.status < 500 &&
+        response.status !== 408
+      ) {
+        throw new NonRetryableError(
+          `OpenAI-compatible embedding failed: ${response.status} ${response.statusText}`,
+          response.status,
+        );
+      }
+
+      throw new Error(
+        `OpenAI-compatible embedding failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const data = (await response.json()) as OpenAICompatibleEmbeddingResponse;
+    const values = data.data?.[0]?.embedding;
+    if (!Array.isArray(values) || values.length === 0) {
+      throw new Error("OpenAI-compatible endpoint returned empty embedding");
+    }
+    return values;
+  }
+
+  async healthCheck(): Promise<boolean> {
+    const controller = new AbortController();
+    this._activeControllers.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      // ========================== 变更记录 ==========================
+      // [日期]     2026-03-14
+      // [类型]     修复Bug
+      // [描述]     OpenAI-compatible provider 的 healthCheck 现在会验证返回 embedding 的存在性与维度，不再只看 HTTP 200。
+      // [思路]     某些 relay 会忽略 `dimensions=1024` 或返回异常 payload；若只检查 `response.ok`，status 会错误地显示 ready。
+      // [影响范围] OpenAI-compatible relay 健康检查、memory_status、openai/openai-auto 模式的运维诊断。
+      // [潜在风险] 对 payload 不规范的 relay 会更早被判定为 unavailable，这正是本次修复期望的 fail-fast 行为。
+      // ==============================================================
+      const response = await fetch(this.getEmbeddingsUrl(), {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.modelName,
+          input: "ok",
+          dimensions: this.dimension,
+          encoding_format: "float",
+        }),
+      });
+      if (!response.ok) {
+        return false;
+      }
+
+      const data = (await response.json()) as OpenAICompatibleEmbeddingResponse;
+      const values = data.data?.[0]?.embedding;
+      if (!Array.isArray(values) || values.length === 0) {
+        return false;
+      }
+      if (values.length !== this.dimension) {
+        log.error(
+          `OpenAI-compatible ${this.modelName} dimension mismatch during healthCheck: actual=${values.length}, expected=${this.dimension}`,
+        );
+        return false;
+      }
+
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      this._activeControllers.delete(controller);
+    }
+  }
+
+  /**
+   * 接受三种配置方式并统一到可调用的 embeddings URL：
+   * - https://host
+   * - https://host/v1
+   * - https://host/v1/embeddings
+   */
+  private getEmbeddingsUrl(): string {
+    if (this.baseUrl.endsWith("/embeddings")) {
+      return this.baseUrl;
+    }
+    if (/\/v\d+(?:beta)?$/i.test(this.baseUrl)) {
+      return `${this.baseUrl}/embeddings`;
+    }
+    return `${this.baseUrl}/v1/embeddings`;
   }
 }

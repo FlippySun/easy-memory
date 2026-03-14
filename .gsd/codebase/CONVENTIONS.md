@@ -5,6 +5,7 @@
 ## TypeScript Style
 
 **Strict mode:** Yes — `tsconfig.json` enables `strict: true` plus additional strictness flags:
+
 - `noUnusedLocals: true`
 - `noUnusedParameters: true`
 - `noFallthroughCasesInSwitch: true`
@@ -19,18 +20,18 @@
 
 ## Naming Conventions
 
-| Element | Convention | Example |
-|---------|-----------|---------|
-| Files | kebab-case | `memory-routes.ts`, `api-key-manager.ts`, `rate-limiter.ts` |
-| Directories | kebab-case | `src/services/`, `src/utils/`, `src/api/` |
-| Functions | camelCase | `createContainer()`, `handleSave()`, `basicSanitize()` |
-| Classes | PascalCase | `QdrantService`, `EmbeddingService`, `BM25Encoder`, `RateLimiter` |
-| Types/Interfaces | PascalCase | `AppConfig`, `MemoryMetadata`, `SaveHandlerDeps`, `EmbeddingResult` |
-| Enums (const arrays) | UPPER_SNAKE_CASE | `SOURCE_ENUM`, `FACT_TYPE_ENUM`, `LIFECYCLE_ENUM` |
-| Constants | UPPER_SNAKE_CASE | `MAX_CONTENT_LENGTH`, `CURRENT_SCHEMA_VERSION`, `ONE_MINUTE_MS` |
-| Zod schemas | PascalCase + `Schema` suffix | `MemoryMetadataSchema`, `MemorySaveInputSchema`, `BrowseQuerySchema` |
-| Type from Zod | PascalCase (inferred) | `type MemoryMetadata = z.infer<typeof MemoryMetadataSchema>` |
-| Collection names | `em_` prefix + slugified project | `em_my-project` via `collectionName()` |
+| Element              | Convention                       | Example                                                              |
+| -------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| Files                | kebab-case                       | `memory-routes.ts`, `api-key-manager.ts`, `rate-limiter.ts`          |
+| Directories          | kebab-case                       | `src/services/`, `src/utils/`, `src/api/`                            |
+| Functions            | camelCase                        | `createContainer()`, `handleSave()`, `basicSanitize()`               |
+| Classes              | PascalCase                       | `QdrantService`, `EmbeddingService`, `BM25Encoder`, `RateLimiter`    |
+| Types/Interfaces     | PascalCase                       | `AppConfig`, `MemoryMetadata`, `SaveHandlerDeps`, `EmbeddingResult`  |
+| Enums (const arrays) | UPPER_SNAKE_CASE                 | `SOURCE_ENUM`, `FACT_TYPE_ENUM`, `LIFECYCLE_ENUM`                    |
+| Constants            | UPPER_SNAKE_CASE                 | `MAX_CONTENT_LENGTH`, `CURRENT_SCHEMA_VERSION`, `ONE_MINUTE_MS`      |
+| Zod schemas          | PascalCase + `Schema` suffix     | `MemoryMetadataSchema`, `MemorySaveInputSchema`, `BrowseQuerySchema` |
+| Type from Zod        | PascalCase (inferred)            | `type MemoryMetadata = z.infer<typeof MemoryMetadataSchema>`         |
+| Collection names     | `em_` prefix + slugified project | `em_my-project` via `collectionName()`                               |
 
 ## Import Organization
 
@@ -41,6 +42,7 @@ Imports are grouped in this order (no enforced linter rule, but consistent acros
 3. **Internal modules** — `import { log } from "../utils/logger.js"`, `import type { AppContainer } from "../container.js"`
 
 Key patterns:
+
 - **Always use `.js` extension** in import paths (ESM requirement with NodeNext resolution)
 - **Use `import type`** for type-only imports: `import type { EmbeddingProvider } from "./embedding-providers.js"`
 - **Re-export convenience**: `export type { EmbeddingProvider } from "./embedding-providers.js"` in facade modules like `src/services/embedding.ts`
@@ -88,7 +90,10 @@ HTTP middleware catches exceptions and returns sanitized error responses. Stack 
 ```typescript
 // src/api/middlewares.ts — globalErrorHandler
 // Core-layer errors: log full details, return sanitized message
-log.error("Unhandled error in request", { error: err.message, stack: err.stack });
+log.error("Unhandled error in request", {
+  error: err.message,
+  stack: err.stack,
+});
 return c.json({ error: "Internal server error" }, 500);
 ```
 
@@ -141,19 +146,26 @@ appendFile(AUDIT_LOG_PATH, JSON.stringify(entry) + "\n").catch(() => {
 **Hard rule:** **NEVER use `console.log` or `console.info`** — MCP stdio channel must stay clean. All logging goes to stderr.
 
 **Implementation:** JSON-formatted log lines written to `process.stderr.write()`:
+
 ```typescript
 export function safeLog(level: LogLevel, msg: string, data?: unknown): void {
-  const entry: LogEntry = { ts: Date.now(), level, msg, ...(data !== undefined ? { data } : {}) };
+  const entry: LogEntry = {
+    ts: Date.now(),
+    level,
+    msg,
+    ...(data !== undefined ? { data } : {}),
+  };
   process.stderr.write(JSON.stringify(entry) + "\n");
 }
 ```
 
 **Convenience object:**
+
 ```typescript
 export const log = {
   debug: (msg: string, data?: unknown) => safeLog("debug", msg, data),
-  info:  (msg: string, data?: unknown) => safeLog("info", msg, data),
-  warn:  (msg: string, data?: unknown) => safeLog("warn", msg, data),
+  info: (msg: string, data?: unknown) => safeLog("info", msg, data),
+  warn: (msg: string, data?: unknown) => safeLog("warn", msg, data),
   error: (msg: string, data?: unknown) => safeLog("error", msg, data),
 } as const;
 ```
@@ -161,6 +173,7 @@ export const log = {
 **Fallback:** If stderr EPIPE occurs, writes to a fallback log file (`DATA_PATHS.fallbackLog`). If that also fails, silently swallowed.
 
 **Usage pattern:** Every module imports `log` from `../utils/logger.js`:
+
 ```typescript
 import { log } from "../utils/logger.js";
 log.info("Qdrant connection verified");
@@ -175,6 +188,7 @@ Every tool handler accepts a `*HandlerDeps` interface instead of importing singl
 
 - **Where used:** `src/tools/save.ts`, `src/tools/search.ts`, `src/tools/forget.ts`, `src/tools/status.ts`
 - **Example:**
+
 ```typescript
 // src/tools/save.ts
 export interface SaveHandlerDeps {
@@ -198,6 +212,7 @@ All core services instantiated once in `createContainer()`. Shell adapters (MCP,
 ### Dual-Shell Architecture (MCP + HTTP)
 
 The same core logic is exposed through two independent shells:
+
 - **MCP shell:** `src/mcp/server.ts` — stdio transport for AI agent integration
 - **HTTP shell:** `src/api/server.ts` — Hono-based REST API for VPS deployment
 
@@ -230,6 +245,7 @@ Concurrent writes to the same project are serialized via a Promise-chain mutex p
 ### Section Separators
 
 Source files use comment-style section separators for visual organization:
+
 ```typescript
 // =========================================================================
 // Types
@@ -259,4 +275,4 @@ Every source module starts with a JSDoc block containing `@module` and `@descrip
 
 ---
 
-*Convention analysis: 2026-03-14*
+_Convention analysis: 2026-03-14_

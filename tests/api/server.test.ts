@@ -2,8 +2,6 @@
  * @module tests/api/server.test
  * @description HTTP API 路由单元测试 — mock 核心服务，验证 HTTP 协议适配。
  */
-
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createApp } from "../../src/api/server.js";
 import type { AppContainer } from "../../src/container.js";
 import type { AppConfig } from "../../src/container.js";
@@ -289,8 +287,45 @@ describe("HTTP API Server", () => {
       const aliasSearch = body.tools.find(
         (t: any) => t.name === "easy_memory_search",
       );
+      const canonicalSave = body.tools.find(
+        (t: any) => t.name === "memory_save",
+      );
       expect(aliasSearch.description).toContain("[PREFERRED ALIAS]");
       expect(aliasSearch.inputSchema).toEqual(canonicalSearch.inputSchema);
+
+      // [2026-03-14][修复Bug] 断言 server-card 暴露 cross_model 与扩展元字段，防止发现层 schema 再次落后于运行时能力。
+      expect(canonicalSearch.inputSchema.properties).toHaveProperty(
+        "cross_model",
+      );
+      expect(canonicalSearch.inputSchema.properties.limit.type).toBe("integer");
+      expect(canonicalSearch.inputSchema.properties).toHaveProperty(
+        "memory_scope",
+      );
+      expect(canonicalSearch.inputSchema.properties).toHaveProperty(
+        "device_id",
+      );
+      expect(canonicalSearch.inputSchema.properties).toHaveProperty(
+        "git_branch",
+      );
+      expect(canonicalSave.inputSchema.properties).toHaveProperty(
+        "source_file",
+      );
+      expect(canonicalSave.inputSchema.properties).toHaveProperty(
+        "source_line",
+      );
+      expect(canonicalSave.inputSchema.properties).toHaveProperty(
+        "related_ids",
+      );
+      expect(canonicalSave.inputSchema.properties).toHaveProperty(
+        "memory_scope",
+      );
+      expect(canonicalSave.inputSchema.properties).toHaveProperty(
+        "memory_type",
+      );
+      expect(canonicalSave.inputSchema.properties).toHaveProperty("weight");
+      expect(canonicalSave.inputSchema.properties.content.pattern).toBe(
+        ".*\\S.*",
+      );
     });
   });
 
@@ -420,6 +455,24 @@ describe("HTTP API Server", () => {
       const body = await res.json();
       expect(body.status).toBe("saved");
       expect(body.id).toBeDefined();
+    });
+
+    it("should reject whitespace-only content at the HTTP shell boundary", async () => {
+      const app = createApp(container);
+      const res = await app.request("/api/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          content: "   ",
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBe("Validation failed");
     });
   });
 

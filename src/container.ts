@@ -18,6 +18,7 @@ import {
   EmbeddingService,
   OllamaEmbeddingProvider,
   GeminiEmbeddingProvider,
+  OpenAICompatibleEmbeddingProvider,
 } from "./services/embedding.js";
 import type { EmbeddingProvider } from "./services/embedding.js";
 import { BM25Encoder } from "./services/bm25.js";
@@ -35,7 +36,26 @@ import { log } from "./utils/logger.js";
 // Types
 // =========================================================================
 
-export type EmbeddingProviderMode = "ollama" | "gemini" | "auto";
+export type EmbeddingProviderMode =
+  | "ollama"
+  | "gemini"
+  | "openai"
+  | "auto"
+  | "openai-auto";
+
+const EMBEDDING_PROVIDER_MODES = [
+  "ollama",
+  "gemini",
+  "openai",
+  "auto",
+  "openai-auto",
+] as const;
+
+function isEmbeddingProviderMode(
+  value: string,
+): value is EmbeddingProviderMode {
+  return (EMBEDDING_PROVIDER_MODES as readonly string[]).includes(value);
+}
 
 /**
  * 应用配置 — 从环境变量解析，强类型化。
@@ -53,6 +73,9 @@ export interface AppConfig {
   geminiProjectId: string;
   geminiRegion: string;
   geminiModel: string;
+  openaiEmbeddingApiKey: string;
+  openaiEmbeddingBaseUrl: string;
+  openaiEmbeddingModel: string;
 
   // Application
   defaultProject: string;
@@ -123,8 +146,37 @@ export interface AppContainer {
  * 防御性 parseInt — NaN/负数降级为 fallback。
  */
 function safeParseInt(value: string | undefined, fallback: number): number {
-  const parsed = parseInt(value ?? String(fallback), 10);
+  const parsed = Number.parseInt(value ?? String(fallback), 10);
   return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+}
+
+/**
+ * ========================== 变更记录 ==========================
+ * [日期]     2026-03-14
+ * [类型]     配置变更
+ * [描述]     调整 embedding 默认推断策略：显式配置优先，其次优先选择已配置官方远端模型（OpenAI-compatible relay → Gemini Vertex AI），最后才回退到本地 Ollama。
+ * [思路]     通过“凭据即意图”的推断规则，让项目在提供远端 API Key 时自动采用远端官方模型语义；若完全未配置远端凭据，则保留 Ollama 作为零配置兜底，避免启动即失败。
+ * [参数与返回值] 参数 env: 环境变量键值对；返回值 string: 解析出的 embedding provider mode，后续会由 parseAppConfig 做合法性校验。
+ * [影响范围] parseAppConfig() 默认行为、Docker/.env 模板预期、HTTP/MCP 双壳共享容器默认 provider 选择。
+ * [潜在风险] 当同时配置 OpenAI-compatible 与 Gemini 凭据且未显式指定 EMBEDDING_PROVIDER 时，将优先选择 OpenAI-compatible relay；如需 Gemini 优先，必须显式设置 provider。
+ * ==============================================================
+ */
+function resolveEmbeddingProviderMode(
+  env: Record<string, string | undefined>,
+): string {
+  if (env.EMBEDDING_PROVIDER) {
+    return env.EMBEDDING_PROVIDER;
+  }
+
+  if (env.OPENAI_EMBEDDING_API_KEY) {
+    return "openai-auto";
+  }
+
+  if (env.GEMINI_API_KEY && env.GEMINI_PROJECT_ID) {
+    return "auto";
+  }
+
+  return "ollama";
 }
 
 /**
@@ -134,17 +186,18 @@ function safeParseInt(value: string | undefined, fallback: number): number {
 export function parseAppConfig(
   env: Record<string, string | undefined> = process.env,
 ): AppConfig {
-  const embeddingProvider = (env.EMBEDDING_PROVIDER ?? "ollama") as string;
+  const embeddingProvider = resolveEmbeddingProviderMode(env);
 
   // 验证 embeddingProvider 值合法
-  if (!["ollama", "gemini", "auto"].includes(embeddingProvider)) {
+  if (!isEmbeddingProviderMode(embeddingProvider)) {
     throw new Error(
-      `Invalid EMBEDDING_PROVIDER="${embeddingProvider}". Must be one of: ollama, gemini, auto`,
+      `Invalid EMBEDDING_PROVIDER="${embeddingProvider}". Must be one of: ollama, gemini, openai, auto, openai-auto`,
     );
   }
 
   const geminiApiKey = env.GEMINI_API_KEY ?? "";
   const geminiProjectId = env.GEMINI_PROJECT_ID ?? "";
+  const openaiEmbeddingApiKey = env.OPENAI_EMBEDDING_API_KEY ?? "";
 
   // Gemini/Auto 模式必须提供 API Key 和 Project ID
   if (
@@ -164,7 +217,16 @@ export function parseAppConfig(
     );
   }
 
-  const mode = (env.EASY_MEMORY_MODE ?? "mcp") as string;
+  if (
+    (embeddingProvider === "openai" || embeddingProvider === "openai-auto") &&
+    !openaiEmbeddingApiKey
+  ) {
+    throw new Error(
+      `EMBEDDING_PROVIDER="${embeddingProvider}" requires OPENAI_EMBEDDING_API_KEY env var`,
+    );
+  }
+
+  const mode = env.EASY_MEMORY_MODE ?? "mcp";
   if (mode !== "mcp" && mode !== "http") {
     throw new Error(
       `Invalid EASY_MEMORY_MODE="${mode}". Must be one of: mcp, http`,
@@ -175,13 +237,18 @@ export function parseAppConfig(
     qdrantUrl: env.QDRANT_URL ?? "http://localhost:6333",
     qdrantApiKey: env.QDRANT_API_KEY ?? "easy-memory-dev",
 
-    embeddingProvider: embeddingProvider as EmbeddingProviderMode,
+    embeddingProvider,
     ollamaBaseUrl: env.OLLAMA_BASE_URL ?? "http://localhost:11434",
     ollamaModel: env.OLLAMA_MODEL ?? "bge-m3",
     geminiApiKey,
     geminiProjectId,
     geminiRegion: env.GEMINI_REGION ?? "us-central1",
     geminiModel: env.GEMINI_MODEL ?? "gemini-embedding-001",
+    openaiEmbeddingApiKey,
+    openaiEmbeddingBaseUrl:
+      env.OPENAI_EMBEDDING_BASE_URL ?? "https://api.vectorengine.ai/v1",
+    openaiEmbeddingModel:
+      env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small",
 
     defaultProject: env.DEFAULT_PROJECT ?? "default",
 
@@ -191,7 +258,7 @@ export function parseAppConfig(
     geminiMaxPerHour: safeParseInt(env.GEMINI_MAX_PER_HOUR, 200),
     geminiMaxPerDay: safeParseInt(env.GEMINI_MAX_PER_DAY, 2000),
 
-    mode: mode as "mcp" | "http",
+    mode,
     httpPort: safeParseInt(env.HTTP_PORT, 3080),
     httpAuthToken: env.HTTP_AUTH_TOKEN ?? "",
 
@@ -253,27 +320,58 @@ export function createContainer(config: AppConfig): AppContainer {
     timeoutMs: config.ollamaTimeoutMs,
   });
 
-  if (
-    config.embeddingProvider === "gemini" ||
-    config.embeddingProvider === "auto"
-  ) {
-    const geminiProvider = new GeminiEmbeddingProvider({
-      apiKey: config.geminiApiKey,
-      projectId: config.geminiProjectId,
-      region: config.geminiRegion,
-      model: config.geminiModel,
-      // [FIX C-1]: 传递熔断器检查回调，Provider 内部重试时可检查熔断状态。
-      // 防止 100 个并发请求穿透熔断器窗口期，每个白白浪费 ~8.5s 重试。
-      isCircuitOpen: () => rateLimiter.isGeminiCircuitOpen,
-    });
-
-    if (config.embeddingProvider === "auto") {
-      providers.push(geminiProvider, ollamaProvider);
-      log.info("Dual-engine mode: Gemini primary, Ollama fallback");
-    } else {
-      providers.push(geminiProvider);
-      log.info("Single-engine mode: Gemini only");
-    }
+  // ========================== 变更记录 ==========================
+  // [日期]     2026-03-14
+  // [类型]     新增功能
+  // [描述]     扩展 EmbeddingProvider 选择器，新增 OpenAI-compatible / 第三方中转 Provider，同时保留官方 Gemini Vertex AI 链路与原有 auto 行为。
+  // [思路]     采用显式 provider mode（openai / openai-auto）避免破坏旧有 gemini / auto 语义；第三方中转默认走兼容协议 `/v1/embeddings`。
+  // [影响范围] createContainer() Provider 装配顺序、日志输出、远端 embedding 路由行为。
+  // [潜在风险] 若用户在 openai/openai-auto 模式下填入非兼容网关地址，将在 Provider healthCheck/embed 阶段暴露为配置错误。
+  // ==============================================================
+  if (config.embeddingProvider === "gemini") {
+    providers.push(
+      new GeminiEmbeddingProvider({
+        apiKey: config.geminiApiKey,
+        projectId: config.geminiProjectId,
+        region: config.geminiRegion,
+        model: config.geminiModel,
+        // [FIX C-1]: 传递熔断器检查回调，Provider 内部重试时可检查熔断状态。
+        // 防止 100 个并发请求穿透熔断器窗口期，每个白白浪费 ~8.5s 重试。
+        isCircuitOpen: () => rateLimiter.isGeminiCircuitOpen,
+      }),
+    );
+    log.info("Single-engine mode: Gemini only");
+  } else if (config.embeddingProvider === "auto") {
+    providers.push(
+      new GeminiEmbeddingProvider({
+        apiKey: config.geminiApiKey,
+        projectId: config.geminiProjectId,
+        region: config.geminiRegion,
+        model: config.geminiModel,
+        isCircuitOpen: () => rateLimiter.isGeminiCircuitOpen,
+      }),
+      ollamaProvider,
+    );
+    log.info("Dual-engine mode: Gemini primary, Ollama fallback");
+  } else if (config.embeddingProvider === "openai") {
+    providers.push(
+      new OpenAICompatibleEmbeddingProvider({
+        apiKey: config.openaiEmbeddingApiKey,
+        baseUrl: config.openaiEmbeddingBaseUrl,
+        model: config.openaiEmbeddingModel,
+      }),
+    );
+    log.info("Single-engine mode: OpenAI-compatible only");
+  } else if (config.embeddingProvider === "openai-auto") {
+    providers.push(
+      new OpenAICompatibleEmbeddingProvider({
+        apiKey: config.openaiEmbeddingApiKey,
+        baseUrl: config.openaiEmbeddingBaseUrl,
+        model: config.openaiEmbeddingModel,
+      }),
+      ollamaProvider,
+    );
+    log.info("Dual-engine mode: OpenAI-compatible primary, Ollama fallback");
   } else {
     providers.push(ollamaProvider);
     log.info("Single-engine mode: Ollama only");

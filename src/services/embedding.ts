@@ -21,10 +21,12 @@ export type { EmbeddingProvider } from "./embedding-providers.js";
 export {
   OllamaEmbeddingProvider,
   GeminiEmbeddingProvider,
+  OpenAICompatibleEmbeddingProvider,
   validateVector,
   NonRetryableError,
   type OllamaProviderConfig,
   type GeminiProviderConfig,
+  type OpenAICompatibleProviderConfig,
 } from "./embedding-providers.js";
 
 // =========================================================================
@@ -215,10 +217,27 @@ export class EmbeddingService {
    * 健康检查 — 任一 Provider 可用即返回 true。
    */
   async healthCheck(): Promise<boolean> {
+    // ========================== 变更记录 ==========================
+    // [日期]     2026-03-14
+    // [类型]     修复Bug
+    // [描述]     healthCheck() 现在会应用 shouldUseProvider 过滤器，避免已被熔断/预算护栏跳过的 Provider 仍把整体状态误报为 ready。
+    // [思路]     状态检查应与真实可用 provider 集保持一致；否则 `memory_status` 可能在 Gemini 已被跳过时仍报告 embedding=ready。
+    // [影响范围] memory_status、HTTP `/api/status`、所有依赖 EmbeddingService.healthCheck() 的健康检查路径。
+    // [潜在风险] 当所有 Provider 都被过滤掉时，healthCheck 将返回 false；这比误报 ready 更符合真实系统状态。
+    // ==============================================================
+    const providerFilter = this.shouldUseProvider;
+    const usableProviders = providerFilter
+      ? this.providers.filter((provider) => providerFilter(provider))
+      : this.providers;
+
+    if (usableProviders.length === 0) {
+      return false;
+    }
+
     // 防御性: 即使某个 Provider 的 healthCheck() 违反契约抛异常,
     // 也不会导致 Promise.all fast-fail 拖垮其他健康的 Provider
     const results = await Promise.all(
-      this.providers.map((p) => p.healthCheck().catch(() => false)),
+      usableProviders.map((p) => p.healthCheck().catch(() => false)),
     );
     return results.some(Boolean);
   }

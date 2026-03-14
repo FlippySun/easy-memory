@@ -26,7 +26,8 @@ import {
 
 export const HttpSaveInputSchema = z
   .object({
-    content: z.string().min(1),
+    // [2026-03-14][修复Bug] HTTP Shell 与核心 save schema 对齐：纯空白 content 在路由层直接 400，避免发现层/执行层语义漂移。
+    content: z.string().trim().min(1),
     project: z.string().optional(),
     source: z.enum(SOURCE_ENUM).optional(),
     fact_type: z.enum(FACT_TYPE_ENUM).optional(),
@@ -58,6 +59,15 @@ export const HttpSearchInputSchema = z
     threshold: z.number().min(0).max(1).optional(),
     include_outdated: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
+    // ========================== 变更记录 ==========================
+    // [日期]     2026-03-14
+    // [类型]     配置变更
+    // [描述]     HTTP Shell 搜索 schema 暴露 cross_model，允许运维/客户端在迁移或 fallback 排查时显式放开同模型过滤。
+    // [思路]     核心 `MemorySearchInputSchema` 已支持 cross_model，但 HTTP 壳层此前未透出该字段，导致真实 API 无法利用既有能力排查 mixed-model 可见性问题。
+    // [影响范围] HTTP `/api/search` schema、README API 文档、远程 MCP 代理参数透传。
+    // [潜在风险] 打开 cross_model 后相似度分数可能跨语义空间失真，因此保持可选且默认关闭。
+    // ==============================================================
+    cross_model: z.boolean().optional(),
     // v0.7.0: 层级过滤
     device_id: z.string().optional(),
     git_branch: z.string().optional(),

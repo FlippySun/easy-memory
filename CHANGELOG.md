@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] - 2026-03-14
+
+### Changed
+
+- **[Embedding] 默认远端向量模型切换为第三方中转服务**: 使用 OpenAI-compatible relay (`api.vectorengine.ai`) 作为默认远端 embedding 引擎，替换此前不可用的远端模型配置；模型 `text-embedding-3-small`，维度 1024。
+
+### Tests
+
+- **发布前验证**: 940 单测全绿，`pnpm typecheck` 通过，`pnpm build` + `pnpm build:web` 构建成功，第三方中转服务连通性验证通过。
+
 ## [0.5.7] - 2026-03-12
 
 ### Added

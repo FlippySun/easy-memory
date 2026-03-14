@@ -1,7 +1,7 @@
 {
   "name": "easy-memory",
-  "version": "0.5.7",
-  "description": "MCP persistent memory service — let AI assistants remember across sessions. Powered by Qdrant vector search + Ollama/Gemini embedding with hybrid retrieval (vector + BM25).",
+  "version": "0.5.8",
+  "description": "MCP persistent memory service — let AI assistants remember across sessions. Powered by Qdrant vector search + official embeddings (via OpenAI-compatible relay or Gemini Vertex AI) with Ollama fallback and hybrid retrieval (vector + BM25).",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,6 +31,7 @@
     "memory",
     "persistent-memory",
     "qdrant",
+    "openai",
     "ollama",
     "gemini",
     "embedding",

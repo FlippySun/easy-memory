@@ -117,6 +117,75 @@ describe("createRemoteMcpServer memory_forget mapping", () => {
     );
   });
 
+  it("should normalize legacy save payload before forwarding", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: "saved" }),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createRemoteMcpServer } =
+      await import("../../src/mcp/remote-server.js");
+
+    await createRemoteMcpServer("em_test_key", "https://memory.example.com");
+
+    const saveHandler = toolHandlers.get("memory_save");
+    expect(saveHandler).toBeDefined();
+
+    await saveHandler!({
+      content: "remember this",
+      source: "documentation",
+      category: "convention",
+      metadata: {
+        tags: ["tooling", "docs"],
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { body?: string }];
+    const body = JSON.parse(init.body ?? "{}");
+    expect(body).toEqual({
+      content: "remember this",
+      source: "manual",
+      fact_type: "observation",
+      tags: ["tooling", "docs", "category:convention"],
+    });
+  });
+
+  it("should normalize legacy search payload before forwarding", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ memories: [] }),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createRemoteMcpServer } =
+      await import("../../src/mcp/remote-server.js");
+
+    await createRemoteMcpServer("em_test_key", "https://memory.example.com");
+
+    const searchHandler = toolHandlers.get("memory_search");
+    expect(searchHandler).toBeDefined();
+
+    await searchHandler!({
+      query: "tooling convention",
+      score_threshold: 0.42,
+      category: "convention",
+      tags: ["docs"],
+      cross_model: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { body?: string }];
+    const body = JSON.parse(init.body ?? "{}");
+    expect(body).toEqual({
+      query: "tooling convention",
+      threshold: 0.42,
+      tags: ["docs", "category:convention"],
+      cross_model: true,
+    });
+  });
+
   it("should send id/action/reason payload to /api/forget", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

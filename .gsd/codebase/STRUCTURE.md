@@ -139,24 +139,24 @@ deploy/                          - Deployment configurations (Docker, etc.)
 
 ## Key Locations
 
-| What | Where | Notes |
-|------|-------|-------|
-| Process entry point | `src/index.ts` | Mode routing: checks `EASY_MEMORY_TOKEN` → `EASY_MEMORY_MODE` |
-| DI container factory | `src/container.ts` | Single `createContainer()` — all singletons wired here |
-| Core business logic | `src/tools/` | 4 handlers: save, search, forget, status. Pure functions taking typed deps. |
-| Infrastructure services | `src/services/` | 11 stateful services (Qdrant, Embedding, BM25, Audit, Analytics, ApiKeyManager, Auth, BanManager, RuntimeConfig, MemoryOwnership, EmbeddingProviders) |
-| MCP shell adapter | `src/mcp/server.ts` | `registerTools()` (public, reused by HTTP MCP endpoint) + `startMcpShell()` |
-| HTTP shell adapter | `src/api/server.ts` | Hono app factory + `startHttpShell()` |
-| HTTP middleware | `src/api/middlewares.ts` | bearerAuth, globalErrorHandler, requestLogger, TLS, content-type |
-| Admin routes | `src/api/admin-routes.ts` | Keys, bans, analytics, audit, config, actions — 1137 LOC |
-| Auth routes | `src/api/auth-routes.ts` | Login, logout, refresh, register, user CRUD — 897 LOC |
-| Schema definitions | `src/types/schema.ts` | Core memory schemas (Single Source of Truth) |
-| HTTP-specific schemas | `src/api/schemas.ts` | `.strict()` versions for defense-in-depth |
-| Shared logger | `src/utils/logger.ts` | stderr-only — `log.info/warn/error/debug` |
-| Data path config | `src/utils/paths.ts` | `DATA_PATHS` object with all persistent file locations |
-| Test suites | `tests/` | Mirrors `src/` structure exactly |
-| Admin web app | `web/src/` | React SPA with pages, components, contexts, i18n |
-| Deployment | `deploy/` | Docker and related configs |
+| What                    | Where                     | Notes                                                                                                                                                 |
+| ----------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Process entry point     | `src/index.ts`            | Mode routing: checks `EASY_MEMORY_TOKEN` → `EASY_MEMORY_MODE`                                                                                         |
+| DI container factory    | `src/container.ts`        | Single `createContainer()` — all singletons wired here                                                                                                |
+| Core business logic     | `src/tools/`              | 4 handlers: save, search, forget, status. Pure functions taking typed deps.                                                                           |
+| Infrastructure services | `src/services/`           | 11 stateful services (Qdrant, Embedding, BM25, Audit, Analytics, ApiKeyManager, Auth, BanManager, RuntimeConfig, MemoryOwnership, EmbeddingProviders) |
+| MCP shell adapter       | `src/mcp/server.ts`       | `registerTools()` (public, reused by HTTP MCP endpoint) + `startMcpShell()`                                                                           |
+| HTTP shell adapter      | `src/api/server.ts`       | Hono app factory + `startHttpShell()`                                                                                                                 |
+| HTTP middleware         | `src/api/middlewares.ts`  | bearerAuth, globalErrorHandler, requestLogger, TLS, content-type                                                                                      |
+| Admin routes            | `src/api/admin-routes.ts` | Keys, bans, analytics, audit, config, actions — 1137 LOC                                                                                              |
+| Auth routes             | `src/api/auth-routes.ts`  | Login, logout, refresh, register, user CRUD — 897 LOC                                                                                                 |
+| Schema definitions      | `src/types/schema.ts`     | Core memory schemas (Single Source of Truth)                                                                                                          |
+| HTTP-specific schemas   | `src/api/schemas.ts`      | `.strict()` versions for defense-in-depth                                                                                                             |
+| Shared logger           | `src/utils/logger.ts`     | stderr-only — `log.info/warn/error/debug`                                                                                                             |
+| Data path config        | `src/utils/paths.ts`      | `DATA_PATHS` object with all persistent file locations                                                                                                |
+| Test suites             | `tests/`                  | Mirrors `src/` structure exactly                                                                                                                      |
+| Admin web app           | `web/src/`                | React SPA with pages, components, contexts, i18n                                                                                                      |
+| Deployment              | `deploy/`                 | Docker and related configs                                                                                                                            |
 
 ## Directory Purposes
 
@@ -190,6 +190,7 @@ deploy/                          - Deployment configurations (Docker, etc.)
 ## Where to Add New Code
 
 **New MCP tool:**
+
 1. Create handler in `src/tools/{name}.ts` with typed `{Name}HandlerDeps` interface
 2. Add input/output Zod schemas to `src/types/schema.ts`
 3. Register in `src/mcp/server.ts` → `registerTools()` (both shells use this)
@@ -198,18 +199,21 @@ deploy/                          - Deployment configurations (Docker, etc.)
 6. Test: `tests/tools/{name}.test.ts`
 
 **New service:**
+
 1. Create service class in `src/services/{name}.ts`
 2. Add to `AppContainer` interface in `src/container.ts`
 3. Instantiate in `createContainer()` respecting dependency order
 4. Test: `tests/services/{name}.test.ts`
 
 **New API route group:**
+
 1. Create route factory `create{Name}Routes()` in `src/api/{name}-routes.ts`
 2. Mount in `src/api/server.ts` via `app.route("/api/{name}", routes)`
 3. Add auth middleware as appropriate
 4. Test: `tests/api/{name}.test.ts`
 
 **New utility:**
+
 1. Add to `src/utils/{name}.ts`
 2. Import where needed (no container wiring required)
 3. Test: `tests/utils/{name}.test.ts`
@@ -281,4 +285,4 @@ tools/*.ts
 
 ---
 
-*Structure analysis: 2026-03-14*
+_Structure analysis: 2026-03-14_

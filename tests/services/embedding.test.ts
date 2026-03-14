@@ -259,6 +259,31 @@ describe("EmbeddingService (Unified Facade)", () => {
       });
       expect(await service.healthCheck()).toBe(false);
     });
+
+    it("should ignore filtered providers in healthCheck", async () => {
+      vi.mocked(primaryProvider.healthCheck).mockResolvedValue(true);
+      vi.mocked(fallbackProvider.healthCheck).mockResolvedValue(false);
+
+      const service = new EmbeddingService({
+        providers: [primaryProvider, fallbackProvider],
+        shouldUseProvider: (provider) => provider.name !== "gemini",
+      });
+
+      expect(await service.healthCheck()).toBe(false);
+      expect(primaryProvider.healthCheck).not.toHaveBeenCalled();
+      expect(fallbackProvider.healthCheck).toHaveBeenCalledTimes(1);
+    });
+
+    it("should return false when all providers are filtered out in healthCheck", async () => {
+      const service = new EmbeddingService({
+        providers: [primaryProvider, fallbackProvider],
+        shouldUseProvider: () => false,
+      });
+
+      expect(await service.healthCheck()).toBe(false);
+      expect(primaryProvider.healthCheck).not.toHaveBeenCalled();
+      expect(fallbackProvider.healthCheck).not.toHaveBeenCalled();
+    });
   });
 
   // ----- close() -----
