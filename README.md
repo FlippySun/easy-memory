@@ -727,7 +727,7 @@ GEMINI_REGION=us-central1          # 可选，默认 us-central1
 pnpm install          # 安装依赖
 pnpm build            # TypeScript 编译
 pnpm typecheck        # 类型检查
-pnpm test             # 单元测试 (850+ tests)
+pnpm test             # 单元测试 (940+ tests)
 pnpm verify:local     # 本地提交前快速校验 (typecheck + test)
 pnpm build:web        # 构建 Web UI 前端
 pnpm build:all        # 构建后端 + 前端
@@ -754,7 +754,7 @@ src/
 ├── services/             # 核心服务
 │   ├── qdrant.ts         # Qdrant 向量数据库
 │   ├── embedding.ts      # Embedding 编排 (多引擎 fallback)
-│   ├── embedding-providers.ts  # Ollama/Gemini Provider
+│   ├── embedding-providers.ts  # Ollama/Gemini/OpenAI-compatible Provider
 │   ├── bm25.ts           # BM25 稀疏向量 (混合检索)
 │   ├── analytics.ts      # SQLite 用量分析聚合
 │   ├── audit.ts          # JSONL 审计日志 (缓冲写入)

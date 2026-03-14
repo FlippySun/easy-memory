@@ -9,11 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **[Embedding] 默认远端向量模型切换为第三方中转服务**: 使用 OpenAI-compatible relay (`api.vectorengine.ai`) 作为默认远端 embedding 引擎，替换此前不可用的远端模型配置；模型 `text-embedding-3-small`，维度 1024。
+- **[Embedding] 默认远端向量模型切换为 OpenAI-compatible relay**: 使用 `api.vectorengine.ai` 作为默认远端 embedding 引擎（模型 `text-embedding-3-small`，维度 1024），替换此前不可用的 Gemini 远端模型配置。新增 `openai-auto` 模式：OpenAI relay 优先，Ollama 自动兜底。
+- **[VPS] 远端服务切换至 openai-auto 模式**: VPS (`memory.zhiz.chat`) 的 `EMBEDDING_PROVIDER` 从 `ollama` 切换为 `openai-auto`，Docker 镜像从本地构建切换为 Docker Hub `thj8632/easy-memory:latest`。
+- **[Docker] 镜像版本号 0.5.8**: 多平台镜像 (amd64 + arm64) 已发布至 Docker Hub。
+
+### Fixed
+
+- **[VPS] .env 配置修复**: 修复 VPS 上 `.env` 文件中 `OPENAI_EMBEDDING_API_KEY` 行被错误拼接的问题。
 
 ### Tests
 
 - **发布前验证**: 940 单测全绿，`pnpm typecheck` 通过，`pnpm build` + `pnpm build:web` 构建成功，第三方中转服务连通性验证通过。
+- **远端 E2E 全量验证**: 97/97 测试用例全部通过（覆盖鉴权安全、CRUD、RRF 混合检索、CJK 分词、敏感信息脱敏、Prompt Injection 检测等 20+ 场景）。
 
 ## [0.5.7] - 2026-03-12
 
